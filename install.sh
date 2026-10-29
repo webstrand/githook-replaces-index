@@ -3,9 +3,9 @@
 # puts the programs in bin/ in its common git directory, the repository's config
 # registers the post-rewrite hook, so that it runs beside any other post-rewrite
 # hooks, and defines the aliases `git whereis`, `git pull-replaces`,
-# `git compare-replaces` and `git rebase-replaces`. The commands find the git
-# directory each time they run, so the repository may move. Running this again
-# updates them.
+# `git compare-replaces` and `git rebase-replaces`; the skill is linked into
+# .claude/skills/ of the checkout. The commands find the git directory each time
+# they run, so the repository may move. Running this again updates them.
 set -euo pipefail
 shopt -s lastpipe
 IFS=$'\n\t'
@@ -27,6 +27,10 @@ git config alias.whereis "!$bin/git-whereis"
 git config alias.pull-replaces "!$bin/git-pull-replaces"
 git config alias.compare-replaces "!$bin/git-compare-replaces"
 git config alias.rebase-replaces "!$bin/git-rebase-replaces"
+
+skills="$(git rev-parse --show-toplevel)/.claude/skills"
+mkdir -p "$skills"
+ln -sfT "$(realpath --relative-to="$skills" "$src/skills/replaces-index")" "$skills/replaces-index"
 
 # When this checkout is a submodule of the repository, githook-submodule-roll
 # rolls it forward to its latest compatible release, unless the repository's
