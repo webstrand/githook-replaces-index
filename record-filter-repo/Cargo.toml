@@ -1,0 +1,16 @@
+[package]
+name = "replaces-index-record-filter-repo"
+version = "0.1.0"
+edition = "2024"
+description = "Records in refs/notes/replaces the replacements that git filter-repo made"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+runner = { package = "replaces-index-runner", path = "../runner" }
+replaces-index-post-rewrite = { path = "../post-rewrite" }
+
+[dev-dependencies]
+tempfile = "3"

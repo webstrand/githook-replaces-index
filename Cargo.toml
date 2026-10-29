@@ -1,0 +1,10 @@
+# The replaces index, a cargo workspace of its own so that a repository may keep it as a
+# submodule without building it with its own crates.
+[workspace]
+resolver = "3"
+members = [
+    "runner",
+    "record",
+    "post-rewrite",
+    "record-filter-repo",
+]

@@ -1,0 +1,10 @@
+[package]
+name = "replaces-index-runner"
+version = "0.1.0"
+edition = "2024"
+description = "Runs git and the other programs that the replaces-index programs call"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+thiserror = "2"

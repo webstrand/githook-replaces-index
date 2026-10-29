@@ -1,0 +1,20 @@
+[package]
+name = "replaces-index-post-rewrite"
+version = "0.1.0"
+edition = "2024"
+description = "Records in refs/notes/replaces the replacements that an amend or a rebase made"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "githook-replaces-index-post-rewrite"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+runner = { package = "replaces-index-runner", path = "../runner" }
+replaces-index-record = { path = "../record" }
+
+[dev-dependencies]
+tempfile = "3"
