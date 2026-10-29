@@ -1,0 +1,19 @@
+[package]
+name = "replaces-index-rebase"
+version = "0.1.0"
+edition = "2024"
+description = "Rebases the current branch onto a rewritten upstream, leaving out what it already holds"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "git-rebase-replaces"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+tempfile = "3"
+runner = { package = "replaces-index-runner", path = "../runner" }
+replaces-index-pull = { path = "../pull" }
+replaces-index-compare = { path = "../compare" }

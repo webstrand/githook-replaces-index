@@ -1,0 +1,20 @@
+[package]
+name = "replaces-index-pull"
+version = "0.1.0"
+edition = "2024"
+description = "Merges a remote's replaces notes into the local ones"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "git-pull-replaces"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+runner = { package = "replaces-index-runner", path = "../runner" }
+replaces-index-record = { path = "../record" }
+
+[dev-dependencies]
+tempfile = "3"

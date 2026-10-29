@@ -207,11 +207,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "replaces-index-compare"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "replaces-index-record",
+ "replaces-index-runner",
+ "replaces-index-store",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "replaces-index-post-rewrite"
 version = "0.1.0"
 dependencies = [
  "clap",
  "replaces-index-record",
+ "replaces-index-runner",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "replaces-index-pull"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "replaces-index-record",
+ "replaces-index-runner",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "replaces-index-rebase"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "replaces-index-compare",
+ "replaces-index-pull",
  "replaces-index-runner",
  "tempfile",
  "thiserror",
@@ -252,6 +287,18 @@ dependencies = [
  "redb",
  "replaces-index-record",
  "replaces-index-runner",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "replaces-index-whereis"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "replaces-index-record",
+ "replaces-index-runner",
+ "replaces-index-store",
  "tempfile",
  "thiserror",
 ]

@@ -1,0 +1,21 @@
+[package]
+name = "replaces-index-whereis"
+version = "0.1.0"
+edition = "2024"
+description = "Prints the commits related to a commit by rewrites, and the refs that hold them"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "git-whereis"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+runner = { package = "replaces-index-runner", path = "../runner" }
+replaces-index-store = { path = "../store" }
+replaces-index-record = { path = "../record" }
+
+[dev-dependencies]
+tempfile = "3"

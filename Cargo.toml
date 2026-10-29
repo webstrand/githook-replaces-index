@@ -7,5 +7,9 @@ members = [
     "record",
     "post-rewrite",
     "store",
+    "whereis",
+    "compare",
+    "pull",
+    "rebase",
     "record-filter-repo",
 ]

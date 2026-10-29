@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Installs the replaces index into the repository this is run from: cargo install
-# puts the programs in bin/ in its common git directory, and the repository's
-# config registers the post-rewrite hook, so that it runs beside any other
-# post-rewrite hooks. The command finds the git directory each time it runs, so
-# the repository may move. Running this again updates them.
+# puts the programs in bin/ in its common git directory, the repository's config
+# registers the post-rewrite hook, so that it runs beside any other post-rewrite
+# hooks, and defines the aliases `git whereis`, `git pull-replaces`,
+# `git compare-replaces` and `git rebase-replaces`. The commands find the git
+# directory each time they run, so the repository may move. Running this again
+# updates them.
 set -euo pipefail
 shopt -s lastpipe
 IFS=$'\n\t'
@@ -14,13 +16,17 @@ fi
 src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd -P)
 root=$(git rev-parse --path-format=absolute --git-common-dir)
 
-for crate in post-rewrite record record-filter-repo; do
+for crate in post-rewrite whereis pull compare rebase record record-filter-repo; do
   cargo install --locked --no-track --force --quiet --root "$root" --path "$src/$crate"
 done
 # shellcheck disable=SC2016
 bin='"$(git rev-parse --git-common-dir)"/bin'
 git config hook.replaces-index.event post-rewrite
 git config hook.replaces-index.command "$bin/githook-replaces-index-post-rewrite"
+git config alias.whereis "!$bin/git-whereis"
+git config alias.pull-replaces "!$bin/git-pull-replaces"
+git config alias.compare-replaces "!$bin/git-compare-replaces"
+git config alias.rebase-replaces "!$bin/git-rebase-replaces"
 
 # When this checkout is a submodule of the repository, githook-submodule-roll
 # rolls it forward to its latest compatible release, unless the repository's
@@ -43,3 +49,8 @@ if [ -n "$super" ] && [ "$(cd -- "$super" && pwd -P)" = "$top" ]; then
   fi
 fi
 echo "replaces-index: installed into $root/bin"
+cat <<'EOF'
+replaces-index: rewrites are recorded in this clone only; run 'git pull-replaces <remote>' to merge in those of a remote
+replaces-index: for each remote whose rewrites every fetch should bring, configure the refspec:
+  git config --add remote.<remote>.fetch '+refs/notes/replaces*:refs/notes/remotes/<remote>/replaces*'
+EOF

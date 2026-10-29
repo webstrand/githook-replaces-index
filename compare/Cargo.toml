@@ -1,0 +1,21 @@
+[package]
+name = "replaces-index-compare"
+version = "0.1.0"
+edition = "2024"
+description = "Compares two chains of commits through the rewrites that relate them"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "git-compare-replaces"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+runner = { package = "replaces-index-runner", path = "../runner" }
+replaces-index-store = { path = "../store" }
+
+[dev-dependencies]
+tempfile = "3"
+replaces-index-record = { path = "../record" }
