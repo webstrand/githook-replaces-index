@@ -198,6 +198,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "redb"
+version = "4.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39178e0a867f9e3eaa6292a4ab1dd3613f2519c5b564341e1e7b29b270736cc4"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "replaces-index-post-rewrite"
 version = "0.1.0"
 dependencies = [
@@ -233,6 +242,17 @@ dependencies = [
 name = "replaces-index-runner"
 version = "0.1.0"
 dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "replaces-index-store"
+version = "0.1.0"
+dependencies = [
+ "redb",
+ "replaces-index-record",
+ "replaces-index-runner",
+ "tempfile",
  "thiserror",
 ]
 

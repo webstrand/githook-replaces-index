@@ -1,0 +1,16 @@
+[package]
+name = "replaces-index-store"
+version = "0.1.0"
+edition = "2024"
+description = "An index of refs/notes/replaces in the git directory, for queries in both directions"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+thiserror = "2"
+runner = { package = "replaces-index-runner", path = "../runner" }
+replaces-index-record = { path = "../record" }
+redb = "4.4.0"
+
+[dev-dependencies]
+tempfile = "3"
