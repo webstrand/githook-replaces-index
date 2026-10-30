@@ -8,6 +8,10 @@ pub enum Error {
     Input(#[source] io::Error),
     #[error("could not find the state of a rebase: {0}")]
     RebaseState(#[source] runner::Error),
+    #[error("could not read {path}: {source}")]
+    ReadState { path: PathBuf, source: io::Error },
+    #[error("could not tell whether a commit was there before the rebase: {0}")]
+    BeforeRebase(#[source] runner::Error),
     #[error("could not tell whether a commit is on the branch: {0}")]
     Branch(#[source] runner::Error),
     #[error("could not read {path}: {source}")]

@@ -10,12 +10,18 @@
 //! state directory, which git removes when the rebase ends or is aborted. `git am` keeps its
 //! state in rebase-apply/ as well, but marks it with `applying` rather than `rebasing`, and runs
 //! no post-rewrite when it ends, so an amend while it is stopped is recorded at once.
+//!
+//! An amend during a rebase of a commit that was there before the rebase began, such as one that a
+//! pick kept as it was or the commit the rebase is onto, is recorded at once as well: the rebase
+//! does not report such a commit as rewritten, so nothing would lead to the amend, and a rebase
+//! that rewrites nothing else runs no post-rewrite when it ends.
 
 mod error;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::mem;
 use std::path::{Path, PathBuf};
 
 use replaces_index_record::Rewrite;
@@ -33,35 +39,64 @@ pub enum Kind {
 
 /// Records the rewrite that `input` reports, one `<old> <new>` line per rewritten commit.
 pub fn post_rewrite(kind: Kind, input: &str) -> Result<(), Error> {
-    let amended = amended()?;
-    if let (Kind::Amend, Some(path)) = (kind, &amended) {
-        return append(path, input);
-    }
-    let amends = match (kind, &amended) {
-        (Kind::Rebase, Some(path)) => Amends::read(path)?,
-        _ => Amends::default(),
-    };
-
     let mut rewrite = Rewrite::parse(input);
-    for (_, new) in &mut rewrite.replacements {
-        *new = amends.last(new, on_branch)?.to_owned();
+    match (kind, rebase_state()?) {
+        (Kind::Amend, Some(state)) => {
+            let mut aside = Vec::new();
+            for replacement in mem::take(&mut rewrite.replacements) {
+                if before_rebase(&state, &replacement.0)? {
+                    rewrite.replacements.push(replacement);
+                } else {
+                    aside.push(replacement);
+                }
+            }
+            set_aside(&state.join(AMENDED), &aside)?;
+        }
+        (Kind::Rebase, Some(state)) => {
+            let amends = Amends::read(&state.join(AMENDED))?;
+            for (_, new) in &mut rewrite.replacements {
+                *new = amends.last(new, on_branch)?.to_owned();
+            }
+        }
+        _ => {}
     }
     replaces_index_record::record(&rewrite).map_err(Error::Record)
 }
 
-/// The file in which the rebase in progress, if any, sets its amends aside.
-fn amended() -> Result<Option<PathBuf>, Error> {
+/// The file of the rebase's state directory in which the hook sets amends aside.
+const AMENDED: &str = "replaces-index-amended";
+
+/// The state directory of the rebase in progress, if any.
+fn rebase_state() -> Result<Option<PathBuf>, Error> {
     let state = |dir| runner::rev_parse_path(&["--git-path", dir]).map_err(Error::RebaseState);
     let merge = state("rebase-merge")?;
     let apply = state("rebase-apply")?;
-    let amended = if apply.join("rebasing").is_file() {
-        Some(apply.join("replaces-index-amended"))
+    let state = if apply.join("rebasing").is_file() {
+        Some(apply)
     } else if merge.is_dir() {
-        Some(merge.join("replaces-index-amended"))
+        Some(merge)
     } else {
         None
     };
-    Ok(amended)
+    Ok(state)
+}
+
+/// Whether `commit` was there before the rebase whose state is in `state` began: an ancestor of
+/// the branch it rebases or of the commit it rebases onto.
+fn before_rebase(state: &Path, commit: &str) -> Result<bool, Error> {
+    let mut args = vec!["rev-list", "-n", "1", commit, "--not"];
+    let mut ids = Vec::new();
+    for name in ["orig-head", "onto"] {
+        let path = state.join(name);
+        match fs::read_to_string(&path) {
+            Ok(id) => ids.push(id),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(Error::ReadState { path, source }),
+        }
+    }
+    args.extend(ids.iter().map(|id| id.trim()));
+    let newer = runner::stdout(&mut runner::git(args)).map_err(Error::BeforeRebase)?;
+    Ok(newer.trim().is_empty())
 }
 
 /// Whether `commit` is HEAD or one of its ancestors.
@@ -75,7 +110,11 @@ fn on_branch(commit: &str) -> Result<bool, Error> {
     Ok(true)
 }
 
-fn append(path: &Path, input: &str) -> Result<(), Error> {
+/// Adds `amends` to those set aside in `path`.
+fn set_aside(path: &Path, amends: &[(String, String)]) -> Result<(), Error> {
+    if amends.is_empty() {
+        return Ok(());
+    }
     let to_error = |source| Error::WriteAmends {
         path: path.to_owned(),
         source,
@@ -85,7 +124,11 @@ fn append(path: &Path, input: &str) -> Result<(), Error> {
         .append(true)
         .open(path)
         .map_err(to_error)?;
-    writeln!(file, "{}", input.trim_end_matches('\n')).map_err(to_error)
+    let lines: String = amends
+        .iter()
+        .map(|(old, new)| format!("{old} {new}\n"))
+        .collect();
+    file.write_all(lines.as_bytes()).map_err(to_error)
 }
 
 /// The amends set aside during a rebase: each commit amended, with the commit that replaced it

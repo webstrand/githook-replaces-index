@@ -76,7 +76,18 @@ fn note(repo: &Path, commit: &str) -> Vec<String> {
 /// Rebases the commits after `onto` with a todo list that `script` edits in place. Each commit
 /// is replayed as a new one, even where its parent is unchanged.
 fn rebase(repo: &Path, onto: &str, script: &str) {
-    let mut command = git(repo, &["rebase", "-q", "-i", "--force-rebase", onto]);
+    rebase_with(repo, &["--force-rebase", onto], script);
+}
+
+/// Rebases as `rebase` does, but keeps each commit whose parent is unchanged, as a rebase does by
+/// default.
+fn rebase_keeping(repo: &Path, onto: &str, script: &str) {
+    rebase_with(repo, &[onto], script);
+}
+
+fn rebase_with(repo: &Path, args: &[&str], script: &str) {
+    let mut command = git(repo, &["rebase", "-q", "-i"]);
+    command.args(args);
     command.env("GIT_SEQUENCE_EDITOR", format!("sed -i -e '{script}'"));
     ok_command(command);
 }
@@ -150,4 +161,53 @@ fn a_rebase_does_not_follow_an_amend_that_was_undone() {
     assert_eq!(ok(repo.path(), &["rev-parse", "HEAD"]), a2);
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
     assert!(note(repo.path(), &undone).is_empty());
+}
+
+#[test]
+fn a_rebase_records_an_amend_of_a_commit_it_kept() {
+    let repo = repo();
+    let a = commit(repo.path(), "a");
+    let b = commit(repo.path(), "b");
+    let script = "1s/$/\\nexec git commit -q --amend -m amended/";
+    rebase_keeping(repo.path(), "HEAD~2", script);
+    let a2 = ok(repo.path(), &["rev-parse", "HEAD~"]);
+    let b2 = ok(repo.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+    assert_eq!(note(repo.path(), &b2), [format!("replaces: {b}")]);
+}
+
+#[test]
+fn a_rebase_that_rewrites_nothing_else_records_an_amend() {
+    let repo = repo();
+    let a = commit(repo.path(), "a");
+    // Every pick keeps its commit, so git reports no rewrite when the rebase ends.
+    let script = "$s/$/\\nexec git commit -q --amend -m amended/";
+    rebase_keeping(repo.path(), "HEAD~", script);
+    let a2 = ok(repo.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+}
+
+#[test]
+fn a_rebase_records_an_amend_of_the_commit_it_rebases_onto() {
+    let repo = repo();
+    let base = ok(repo.path(), &["rev-parse", "HEAD"]);
+    let a = commit(repo.path(), "a");
+    rebase_keeping(repo.path(), "HEAD~", "1s/^/break\\n/");
+    ok(
+        repo.path(),
+        &[
+            "commit",
+            "-q",
+            "--amend",
+            "--allow-empty",
+            "-m",
+            "base, amended",
+        ],
+    );
+    let base2 = ok(repo.path(), &["rev-parse", "HEAD"]);
+    ok(repo.path(), &["rebase", "--continue"]);
+    let a2 = ok(repo.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(ok(repo.path(), &["rev-parse", "HEAD~"]), base2);
+    assert_eq!(note(repo.path(), &base2), [format!("replaces: {base}")]);
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
 }
