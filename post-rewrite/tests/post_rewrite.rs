@@ -132,3 +132,22 @@ fn a_rebase_follows_an_amend_during_it() {
     let notes = ok(repo.path(), &["notes", "--ref=replaces", "list"]);
     assert_eq!(notes.lines().count(), 2);
 }
+
+#[test]
+fn a_rebase_does_not_follow_an_amend_that_was_undone() {
+    let repo = repo();
+    let a = commit(repo.path(), "a");
+    // A new base, so that the rebase makes another commit of `a` within the same second.
+    ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~"]);
+    commit(repo.path(), "upstream");
+    ok(repo.path(), &["switch", "-q", "-"]);
+    rebase(repo.path(), "upstream", "1s/^pick/edit/");
+    let a2 = ok(repo.path(), &["rev-parse", "HEAD"]);
+    ok(repo.path(), &["commit", "-q", "--amend", "-m", "undone"]);
+    let undone = ok(repo.path(), &["rev-parse", "HEAD"]);
+    ok(repo.path(), &["reset", "-q", "--hard", &a2]);
+    ok(repo.path(), &["rebase", "--continue"]);
+    assert_eq!(ok(repo.path(), &["rev-parse", "HEAD"]), a2);
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+    assert!(note(repo.path(), &undone).is_empty());
+}

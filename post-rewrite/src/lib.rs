@@ -5,10 +5,11 @@
 //! a stopped rebase makes, as an amend of a commit the rebase created itself. Such amends are set
 //! aside instead of recorded, and when the rebase ends, each replacement it reports is followed
 //! through them to the commit that took its place, so that no commit the rebase discarded is
-//! named. They are set aside in the rebase's state directory, which git removes when the rebase
-//! ends or is aborted. `git am` keeps its state in rebase-apply/ as well, but marks it with
-//! `applying` rather than `rebasing`, and runs no post-rewrite when it ends, so an amend while it
-//! is stopped is recorded at once.
+//! named. An amend whose commit is no longer on the branch, because it was undone, for instance by
+//! a `git reset` back to the amended commit, is not followed. They are set aside in the rebase's
+//! state directory, which git removes when the rebase ends or is aborted. `git am` keeps its
+//! state in rebase-apply/ as well, but marks it with `applying` rather than `rebasing`, and runs
+//! no post-rewrite when it ends, so an amend while it is stopped is recorded at once.
 
 mod error;
 
@@ -43,7 +44,7 @@ pub fn post_rewrite(kind: Kind, input: &str) -> Result<(), Error> {
 
     let mut rewrite = Rewrite::parse(input);
     for (_, new) in &mut rewrite.replacements {
-        *new = amends.last(new).to_owned();
+        *new = amends.last(new, on_branch)?.to_owned();
     }
     replaces_index_record::record(&rewrite).map_err(Error::Record)
 }
@@ -61,6 +62,17 @@ fn amended() -> Result<Option<PathBuf>, Error> {
         None
     };
     Ok(amended)
+}
+
+/// Whether `commit` is HEAD or one of its ancestors.
+fn on_branch(commit: &str) -> Result<bool, Error> {
+    let mut command = runner::git(["merge-base", "--is-ancestor", commit, "HEAD"]);
+    let output = runner::run(&mut command).map_err(Error::Branch)?;
+    if output.status.code() == Some(1) {
+        return Ok(false);
+    }
+    runner::check(&command, &output).map_err(Error::Branch)?;
+    Ok(true)
 }
 
 fn append(path: &Path, input: &str) -> Result<(), Error> {
@@ -107,15 +119,20 @@ impl Amends {
         Ok(amends)
     }
 
-    /// The commit that finally took the place of `commit`, following the amends.
-    fn last<'a>(&'a self, mut commit: &'a str) -> &'a str {
+    /// The commit that finally took the place of `commit`, following the amends whose commit
+    /// `kept` accepts.
+    fn last<'a>(
+        &'a self,
+        mut commit: &'a str,
+        mut kept: impl FnMut(&str) -> Result<bool, Error>,
+    ) -> Result<&'a str, Error> {
         let mut visited = HashSet::new();
         while let Some(next) = self.last.get(commit) {
-            if next == commit || !visited.insert(commit) {
+            if next == commit || !visited.insert(commit) || !kept(next)? {
                 break;
             }
             commit = next;
         }
-        commit
+        Ok(commit)
     }
 }
