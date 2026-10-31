@@ -17,6 +17,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Mutex;
 
 use clap::Parser;
 use replaces_index_post_rewrite::{Kind, post_rewrite};
@@ -56,8 +57,12 @@ fn run() -> Result<(), Error> {
     };
     let prev = read_or_empty(&prev_path)?;
 
-    post_rewrite(Kind::FilterRepo, &replacements(&map, &prev))
-        .map_err(|failure| Error::Record(failure.error))?;
+    post_rewrite(
+        Kind::FilterRepo,
+        &replacements(&map, &prev),
+        &Mutex::new(None),
+    )
+    .map_err(|failure| Error::Record(failure.error))?;
     // The copy is kept only once the map is recorded, so that a failed run is retried in full.
     fs::copy(&map_path, &prev_path).map_err(|source| Error::Keep {
         path: prev_path,

@@ -23,6 +23,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use replaces_index_record::Rewrite;
 
@@ -38,9 +39,24 @@ pub enum Kind {
 }
 
 /// Records the rewrite that `input` reports, one `<old> <new>` line per rewritten commit.
-pub fn post_rewrite(kind: Kind, input: &str) -> Result<(), Failure> {
-    let rewrite = resolve(kind, Rewrite::parse(input));
-    replaces_index_record::record(&rewrite).map_err(|error| Failure {
+///
+/// Until the ref holds it, `outstanding` holds what of the rewrite remains to be recorded, so that
+/// a thread that must end the process first may keep it; then it holds nothing.
+pub fn post_rewrite(
+    kind: Kind,
+    input: &str,
+    outstanding: &Mutex<Option<Rewrite>>,
+) -> Result<(), Failure> {
+    let hold = |rewrite: Option<Rewrite>| {
+        *outstanding
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = rewrite;
+    };
+    let reported = Rewrite::parse(input);
+    hold(Some(reported.clone()));
+    let rewrite = resolve(kind, reported);
+    hold(Some(rewrite.clone()));
+    replaces_index_record::record_then(&rewrite, || hold(None)).map_err(|error| Failure {
         error: Error::Record(error),
         rewrite,
     })

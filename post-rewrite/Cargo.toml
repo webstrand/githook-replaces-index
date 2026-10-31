@@ -15,6 +15,7 @@ clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 runner = { package = "replaces-index-runner", path = "../runner" }
 replaces-index-record = { path = "../record" }
+signal-hook = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

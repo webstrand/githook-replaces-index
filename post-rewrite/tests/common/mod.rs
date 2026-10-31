@@ -162,6 +162,26 @@ pub fn failing(mut command: Command) -> (String, Output) {
 /// A directory, under `dir`, that holds a `git` that fails when any of its arguments is `fail`, and
 /// otherwise runs git.
 pub fn fake_git(dir: &Path, fail: &str) -> PathBuf {
+    let on_match = "echo \"fake git fails on $arg\" >&2; exit 128";
+    fake_git_script(dir, fail, on_match)
+}
+
+/// A directory, under `dir`, that holds a `git` that, when any of its arguments is `hold`, writes
+/// its process id to `held` in `dir` and waits until `release` exists there, before it runs git.
+pub fn fake_git_holding(dir: &Path, hold: &str) -> PathBuf {
+    let held = dir.join("held");
+    let release = dir.join("release");
+    let on_match = format!(
+        "echo $$ > '{}.tmp'; mv '{}.tmp' '{}'; while [ ! -e '{}' ]; do sleep 0.02; done; break",
+        held.display(),
+        held.display(),
+        held.display(),
+        release.display()
+    );
+    fake_git_script(dir, hold, &on_match)
+}
+
+fn fake_git_script(dir: &Path, arg: &str, on_match: &str) -> PathBuf {
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|path| path.join("git"))
         .find(|git| git.is_file())
@@ -169,17 +189,50 @@ pub fn fake_git(dir: &Path, fail: &str) -> PathBuf {
     let bin = dir.join("fake-bin");
     std::fs::create_dir_all(&bin).unwrap();
     let script = format!(
-        "#!/bin/sh\n\
-         for arg; do\n\
-         \x20 if [ \"$arg\" = '{fail}' ]; then echo \"fake git fails on $arg\" >&2; exit 128; fi\n\
-         done\n\
-         exec '{}' \"$@\"\n",
+        "#!/bin/sh\nfor arg; do\n  if [ \"$arg\" = '{arg}' ]; then {on_match}; fi\ndone\nexec '{}' \"$@\"\n",
         real.display()
     );
     let git = bin.join("git");
     std::fs::write(&git, script).unwrap();
     std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
     bin
+}
+
+/// Waits until the git that `fake_git_holding` made holds, and returns its process id.
+pub fn held(dir: &Path) -> u32 {
+    let held = dir.join("held");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Ok(pid) = std::fs::read_to_string(&held) {
+            return pid.trim().parse().unwrap();
+        }
+        assert!(std::time::Instant::now() < deadline, "git was never held");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Lets the git that `fake_git_holding` made run on.
+pub fn release(dir: &Path) {
+    std::fs::write(dir.join("release"), "").unwrap();
+}
+
+/// Whether process `pid` still exists.
+pub fn alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Sends `signal` to process `pid`, or to the process group `-pid`.
+pub fn kill(signal: &str, pid: &str) {
+    let status = Command::new("kill")
+        .args([&format!("-{signal}"), "--", pid])
+        .status()
+        .unwrap();
+    assert!(status.success());
 }
 
 /// The lock of the notes ref, which keeps every other writer from moving it while it exists.

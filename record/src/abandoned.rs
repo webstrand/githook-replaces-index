@@ -2,7 +2,6 @@
 //! `replaces-abandoned/` in the common git directory, so that they may be recorded later.
 
 use std::fs::{self, File};
-use std::hash::{BuildHasher, RandomState};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,7 +43,7 @@ fn name() -> String {
     let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let random = RandomState::new().hash_one(std::process::id());
+    let random = crate::random();
     format!(
         "{:012}.{:09}-{random:016x}",
         since.as_secs(),

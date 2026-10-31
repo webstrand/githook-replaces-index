@@ -23,6 +23,8 @@ mod error;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
+use std::hash::{BuildHasher, RandomState};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use runner::git;
@@ -72,14 +74,23 @@ type Notes = BTreeMap<String, BTreeSet<String>>;
 
 /// Records `rewrite` in the ref, retrying while other writers move it.
 pub fn record(rewrite: &Rewrite) -> Result<(), Error> {
+    record_then(rewrite, || {})
+}
+
+/// Records `rewrite` as `record` does, and calls `written` as soon as the ref holds it.
+pub fn record_then(rewrite: &Rewrite, written: impl FnOnce()) -> Result<(), Error> {
     if rewrite.replacements.is_empty() {
+        written();
         return Ok(());
     }
-    let staging = Staging(format!("refs/replaces-index/record-{}", std::process::id()));
+    let staging = Staging::new();
     let mut refused = None;
     for n in 1..=ATTEMPTS {
         match attempt(rewrite, &staging.0)? {
-            Attempt::Written => return Ok(()),
+            Attempt::Written => {
+                written();
+                return Ok(());
+            }
             Attempt::Moved => refused = None,
             Attempt::Refused(err) => refused = Some(err),
         }
@@ -104,10 +115,40 @@ enum Attempt {
 /// writer is done.
 struct Staging(String);
 
+/// The staging ref of the writer of this process, if one is writing.
+static STAGING: Mutex<Option<String>> = Mutex::new(None);
+
+impl Staging {
+    fn new() -> Self {
+        let name = format!("refs/replaces-index/record-{:016x}", random());
+        *STAGING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(name.clone());
+        Self(name)
+    }
+}
+
 impl Drop for Staging {
     fn drop(&mut self) {
         let _ = runner::run(&mut git(["update-ref", "-d", &self.0]));
+        *STAGING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
+}
+
+/// The ref that this process stages the notes in while it writes them, which a process that
+/// ends before the writer is done must remove itself.
+pub fn staging() -> Option<String> {
+    STAGING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// A random number, which no other process draws alike.
+fn random() -> u64 {
+    RandomState::new().hash_one(std::process::id())
 }
 
 /// Writes the notes once.

@@ -3,7 +3,8 @@
 use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::Mutex;
 
 /// A program that could not be run, or that failed.
 #[derive(Debug, thiserror::Error)]
@@ -39,12 +40,73 @@ where
     command
 }
 
+/// The programs running, so that a process that is stopping can end them.
+static CHILDREN: Mutex<Children> = Mutex::new(Children {
+    stopping: false,
+    ids: Vec::new(),
+});
+
+struct Children {
+    stopping: bool,
+    ids: Vec<u32>,
+}
+
+fn children() -> std::sync::MutexGuard<'static, Children> {
+    CHILDREN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Ends the programs running, and keeps any other from starting: a thread that would start one
+/// waits instead until the process exits.
+pub fn stop() {
+    let mut children = children();
+    children.stopping = true;
+    for &id in &children.ids {
+        // SAFETY: kill only sends a signal. The id is that of a child of this process; between
+        // the wait that reaps it and its removal from the list, it could only name another
+        // process once the system has handed out every other id.
+        unsafe {
+            libc::kill(id as libc::pid_t, libc::SIGTERM);
+        }
+    }
+}
+
+/// Starts `command`, unless the process is stopping.
+fn spawn(command: &mut Command) -> io::Result<Child> {
+    let mut children = children();
+    if children.stopping {
+        drop(children);
+        loop {
+            std::thread::park();
+        }
+    }
+    let child = command.spawn()?;
+    children.ids.push(child.id());
+    Ok(child)
+}
+
+/// Waits for `child` to end, with its output captured.
+fn wait(child: Child) -> io::Result<Output> {
+    let id = child.id();
+    let output = child.wait_with_output();
+    children().ids.retain(|&other| other != id);
+    output
+}
+
 /// Runs a command to its end, with its output captured, whatever its exit status.
 pub fn run(command: &mut Command) -> Result<Output, Error> {
-    command.output().map_err(|source| Error::Spawn {
-        command: describe(command),
+    let described = describe(command);
+    let to_error = |source| Error::Spawn {
+        command: described.clone(),
         source,
-    })
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = spawn(command).map_err(to_error)?;
+    wait(child).map_err(to_error)
 }
 
 /// Runs a command to its end with `input` as its standard input, with its output captured,
@@ -55,17 +117,16 @@ pub fn run_with_input(command: &mut Command, input: &[u8]) -> Result<Output, Err
         command: described.clone(),
         source,
     };
-    let mut child = command
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(spawn_error)?;
+        .stderr(Stdio::piped());
+    let mut child = spawn(command).map_err(spawn_error)?;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     // Written beside the reads of the output, so that neither side waits on a full pipe.
     let written = std::thread::scope(|scope| {
         let writer = scope.spawn(move || stdin.write_all(input));
-        let output = child.wait_with_output();
+        let output = wait(child);
         (writer.join().expect("the writer does not panic"), output)
     });
     let output = written.1.map_err(spawn_error)?;
