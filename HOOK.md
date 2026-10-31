@@ -38,7 +38,7 @@ Git runs `post-rewrite` after `git commit --amend` and after a rebase, with one 
 
 `record` reads the notes of the commits involved, and gives each new commit a `replaces:` line for the commit it was made from and every `replaces:` line of that commit's note, beside the lines it holds already. It writes the notes that changed in a single commit on the ref, through `git fast-import`, and leaves every other note as it was. Since every commit it annotates is one that a rewrite in this clone made, the clone has it, and fast-import keeps the fanout of the notes tree.
 
-`record` writes the commit to a ref of its own, `refs/replaces-index/record-<pid>`, and moves `refs/notes/replaces` to it only if the notes ref still points at the commit it read, then removes its own ref. When another writer, such as a rebase in another worktree, moved the notes ref in the meantime, `record` reads the notes again and retries, waiting a short and varying time between attempts, and gives up after 20 attempts with an error. No write therefore replaces another.
+`record` writes the commit to a ref of its own, `refs/replaces-index/record-<pid>`, and moves `refs/notes/replaces` to it only if the notes ref still points at the commit it read, then removes its own ref. When git refuses to move the notes ref, `record` reads it again. If another writer, such as a rebase in another worktree, moved it in the meantime, `record` reads the notes again and retries; if it did not move, another process holds its lock, and `record` retries as well. It waits a short and varying time between attempts, and gives up after 20 attempts with an error. No write therefore replaces another.
 
 - An amend records that the new commit was made from the amended one.
 - A rebase records the same for each commit it creates.
@@ -51,6 +51,22 @@ During a rebase, git reports each fixup or squash step, and each amend that an `
 `git am` keeps its state in `rebase-apply/` as a rebase may, but marks it with an `applying` file rather than `rebasing`, and runs no `post-rewrite` when it ends. An amend while `git am` is stopped is therefore recorded at once, rather than set aside.
 
 The lines a note inherits are a copy, for reading one note alone. A clone may rewrite a commit before the note of that commit arrives from another clone, and the new note then inherits nothing from it. The queries do not rely on the copy: they follow the `replaces:` lines from note to note.
+
+## Abandoned rewrites
+
+Git passes a rewrite to `post-rewrite` once only. When the hook cannot record it, for instance because the notes ref stayed locked or is not a commit, or because `git fast-import` failed, it keeps the replacements that remained to be recorded as an abandoned record, and prints the error and a command that records them by hand:
+
+```
+replaces-index: <error>
+replaces-index: the rewrite was kept in <path>; to record it by hand:
+printf '%s\n' '<old> <new>' … | "$(git rev-parse --git-common-dir)"/bin/replaces-index-record
+```
+
+The hook then exits with a failure status, which git ignores: the rewrite itself is complete. During a rebase, the record holds the replacements after they were followed through the amends set aside, or as git reported them when following them failed.
+
+Each record is a file of `<old> <new>` lines in `replaces-abandoned/` in the common git directory, which the worktrees share. It is named after the time it was written and a random suffix, so that the records sort in the order they were written. The hook writes it under a temporary name that begins with `.`, and renames it, so that a record either holds the whole rewrite or does not exist. When no record can be written, for instance because the disk is full, the hook says so and prints the command all the same. A standard error that cannot be written to, for instance once the terminal is gone, does not keep the record from being written.
+
+No program records abandoned records yet: the operator must run the printed command, after which the record may be deleted.
 
 ## Index
 
@@ -118,7 +134,7 @@ A commit that was rewritten as commits the upstream lacks, for instance in a clo
 
 `git filter-repo` does not run `post-rewrite`, and it passes the commits of notes refs through unchanged. After each run, it leaves in `filter-repo/commit-map` in the git directory the id of each commit it processed and the id of the commit it made from it. `record-filter-repo`, run from inside the checkout after `git filter-repo`, passes that map to `post-rewrite`. Commits that filter-repo left unchanged or deleted record nothing, and running the program again records nothing new.
 
-When filter-repo runs on a repository it has already filtered, it composes the new map with the previous one, mapping each original commit to its newest commit without naming the result of the previous run. `record-filter-repo` keeps a copy of each map once it is recorded, `filter-repo/replaces-index-commit-map`, and from it also records that the newest commit was made from the previous run's result. The operator should therefore run it after each run of filter-repo; otherwise the previous run's results are not related to the newest commits except through the original ones.
+When filter-repo runs on a repository it has already filtered, it composes the new map with the previous one, mapping each original commit to its newest commit without naming the result of the previous run. `record-filter-repo` keeps a copy of each map once it is recorded, `filter-repo/replaces-index-commit-map`, and from it also records that the newest commit was made from the previous run's result. The operator should therefore run it after each run of filter-repo; otherwise the previous run's results are not related to the newest commits except through the original ones. The copy is not kept when the map could not be recorded, so that running the program again records the whole map; it keeps no abandoned record.
 
 ## Known limitations
 

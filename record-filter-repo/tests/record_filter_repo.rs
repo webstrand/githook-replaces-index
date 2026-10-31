@@ -103,3 +103,23 @@ fn fails_where_filter_repo_has_not_run() {
         "{stderr}"
     );
 }
+
+#[test]
+fn keeps_no_copy_of_a_map_it_could_not_record() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo = repo.path();
+    assert!(run(repo, "git", &["init", "-q"]).0);
+    let dir = repo.join(".git/filter-repo");
+    fs::create_dir(&dir).unwrap();
+    let a = id('a');
+    let b = commit(repo, "b");
+    fs::write(dir.join("commit-map"), format!("old new\n{a} {b}\n")).unwrap();
+    // A notes ref that is not a commit cannot be written to.
+    let blob = run(repo, "git", &["hash-object", "-w", "--stdin"]).1;
+    assert!(run(repo, "git", &["update-ref", REF, blob.trim()]).0);
+    let (ok, _, stderr) = run(repo, RECORD, &[]);
+    assert!(!ok);
+    assert!(stderr.contains("not a commit"), "{stderr}");
+    // The copy would mean that the map was recorded, and a later run would compose with it.
+    assert!(!dir.join("replaces-index-commit-map").exists());
+}

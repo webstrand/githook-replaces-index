@@ -18,6 +18,7 @@
 //! written to a ref of its own, and the notes ref is moved to it only if it has not moved since it
 //! was read; otherwise the notes are read again.
 
+pub mod abandoned;
 mod error;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -56,6 +57,14 @@ impl Rewrite {
             .collect();
         Self { replacements }
     }
+
+    /// The rewrite as `parse` reads it, one `<old> <new>` line per replacement.
+    pub fn text(&self) -> String {
+        self.replacements
+            .iter()
+            .map(|(old, new)| format!("{old} {new}\n"))
+            .collect()
+    }
 }
 
 /// The lines of notes, by the commit they annotate.
@@ -67,15 +76,28 @@ pub fn record(rewrite: &Rewrite) -> Result<(), Error> {
         return Ok(());
     }
     let staging = Staging(format!("refs/replaces-index/record-{}", std::process::id()));
+    let mut refused = None;
     for n in 1..=ATTEMPTS {
-        if attempt(rewrite, &staging.0)? {
-            return Ok(());
+        match attempt(rewrite, &staging.0)? {
+            Attempt::Written => return Ok(()),
+            Attempt::Moved => refused = None,
+            Attempt::Refused(err) => refused = Some(err),
         }
         // Writers that lost to each other wait for different times before retrying.
         let tenths = (std::process::id() * 7 + n * 13) % 9 + 1;
         std::thread::sleep(Duration::from_millis(u64::from(tenths) * 100));
     }
-    Err(Error::KeptMoving)
+    Err(refused.map_or(Error::KeptMoving, Error::Write))
+}
+
+/// The outcome of one attempt to write the ref.
+enum Attempt {
+    Written,
+    /// Another writer moved the ref after it was read.
+    Moved,
+    /// The ref was not moved, but git refused to move it, for instance while another process
+    /// held its lock.
+    Refused(runner::Error),
 }
 
 /// The ref that a writer writes its commit to before it moves the notes ref, removed when the
@@ -88,9 +110,9 @@ impl Drop for Staging {
     }
 }
 
-/// Writes the notes once. Returns false when the ref moved after it was read.
-fn attempt(rewrite: &Rewrite, staging: &str) -> Result<bool, Error> {
-    let parent = parent()?;
+/// Writes the notes once.
+fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
+    let parent = notes_commit()?;
     let involved: BTreeSet<&str> = rewrite
         .replacements
         .iter()
@@ -102,7 +124,7 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<bool, Error> {
     };
     let changed = notes_of(&current, rewrite);
     if changed.is_empty() {
-        return Ok(true);
+        return Ok(Attempt::Written);
     }
 
     let ident = runner::stdout(&mut git(["var", "GIT_COMMITTER_IDENT"])).map_err(Error::Write)?;
@@ -120,29 +142,37 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<bool, Error> {
     ]))
     .map_err(Error::Write)?;
     // An empty old value requires that the ref does not exist yet.
-    let moved = runner::run(&mut git([
+    let mut update = git([
         "update-ref",
         "-m",
         "replaces-index: record",
         REF,
         commit.trim_end(),
         parent.as_deref().unwrap_or(""),
-    ]))
-    .map_err(Error::Write)?;
-    Ok(moved.status.success())
+    ]);
+    let output = runner::run(&mut update).map_err(Error::Write)?;
+    if output.status.success() {
+        return Ok(Attempt::Written);
+    }
+    // git refuses alike a ref that moved and one it could not lock; only reading it again tells.
+    if notes_commit()? != parent {
+        return Ok(Attempt::Moved);
+    }
+    let refused = runner::check(&update, &output).expect_err("update-ref failed");
+    Ok(Attempt::Refused(refused))
 }
 
 /// The commit that the ref points to, if it exists.
-fn parent() -> Result<Option<String>, Error> {
-    let output = runner::run(&mut git([
-        "rev-parse",
-        "-q",
-        "--verify",
-        &format!("{REF}^{{commit}}"),
-    ]))
-    .map_err(Error::Read)?;
-    let id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    Ok((output.status.success() && !id.is_empty()).then_some(id))
+fn notes_commit() -> Result<Option<String>, Error> {
+    let format = "--format=%(objectname) %(objecttype)";
+    let out = runner::stdout(&mut git(["for-each-ref", format, REF])).map_err(Error::Read)?;
+    let Some((id, kind)) = out.trim().split_once(' ') else {
+        return Ok(None);
+    };
+    if kind != "commit" {
+        return Err(Error::NotACommit(id.to_owned()));
+    }
+    Ok(Some(id.to_owned()))
 }
 
 /// The notes of the commits `wanted`, those that have one.

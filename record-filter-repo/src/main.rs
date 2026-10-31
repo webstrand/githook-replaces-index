@@ -56,7 +56,8 @@ fn run() -> Result<(), Error> {
     };
     let prev = read_or_empty(&prev_path)?;
 
-    post_rewrite(Kind::FilterRepo, &replacements(&map, &prev)).map_err(Error::Record)?;
+    post_rewrite(Kind::FilterRepo, &replacements(&map, &prev))
+        .map_err(|failure| Error::Record(failure.error))?;
     // The copy is kept only once the map is recorded, so that a failed run is retried in full.
     fs::copy(&map_path, &prev_path).map_err(|source| Error::Keep {
         path: prev_path,

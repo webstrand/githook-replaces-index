@@ -13,4 +13,6 @@ pub enum Error {
     Write(#[source] runner::Error),
     #[error("{REF} kept moving while it was written")]
     KeptMoving,
+    #[error("{REF} points to {0}, which is not a commit")]
+    NotACommit(String),
 }

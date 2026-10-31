@@ -2,8 +2,10 @@
 
 #![allow(dead_code)]
 
-use std::path::Path;
-use std::process::Command;
+use std::io::{Seek, SeekFrom, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 pub const HOOK: &str = env!("CARGO_BIN_EXE_githook-replaces-index-post-rewrite");
 
@@ -92,4 +94,123 @@ pub fn rebase_with(repo: &Path, args: &[&str], script: &str) {
     command.args(args);
     command.env("GIT_SEQUENCE_EDITOR", format!("sed -i -e '{script}'"));
     ok_command(command);
+}
+
+/// Runs `command`, a git command that runs the hook, and returns the standard error of both. The
+/// command must succeed, since git ignores the exit status of post-rewrite.
+pub fn stderr_of(mut command: Command) -> String {
+    let output = command.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "{command:?}: {stderr}");
+    stderr
+}
+
+/// A scratch repository with a commit `a` and a commit made from it as an amend makes it, without
+/// running the hook, and their ids.
+pub fn amended() -> (tempfile::TempDir, String, String) {
+    let repo = repo();
+    let a = commit(repo.path(), "a");
+    let a2 = amend_of(repo.path(), "HEAD");
+    (repo, a, a2)
+}
+
+/// A commit made from `commit` as an amend makes it, without running the hook.
+pub fn amend_of(repo: &Path, commit: &str) -> String {
+    let parent = format!("{commit}~");
+    let tree = format!("{commit}^{{tree}}");
+    let message = format!("{commit}, amended");
+    ok(repo, &["commit-tree", &tree, "-p", &parent, "-m", &message])
+}
+
+/// The hook run directly in `repo`, as git runs it, with `input` on its standard input and `path`,
+/// if given, in front of PATH.
+pub fn hook(repo: &Path, kind: &str, input: impl AsRef<[u8]>, path: Option<&Path>) -> Command {
+    let mut hook = Command::new(HOOK);
+    hook.current_dir(repo).arg(kind);
+    with_git_env(&mut hook, repo);
+    if let Some(path) = path {
+        let paths = std::env::var_os("PATH").unwrap_or_default();
+        let paths = std::iter::once(path.to_owned()).chain(std::env::split_paths(&paths));
+        hook.env("PATH", std::env::join_paths(paths).unwrap());
+    }
+    let mut file = tempfile::tempfile().unwrap();
+    file.write_all(input.as_ref()).unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    hook.stdin(file);
+    hook
+}
+
+/// Gives `command` the environment of the git commands in `repo`, so that a program it runs sees
+/// what it would see under git.
+pub fn with_git_env(command: &mut Command, repo: &Path) {
+    for (key, value) in git(repo, &[]).get_envs() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
+}
+
+/// The output of `command`, which must fail.
+pub fn failing(mut command: Command) -> (String, Output) {
+    let output = command.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(!output.status.success(), "{command:?} succeeded: {stderr}");
+    (stderr, output)
+}
+
+/// A directory, under `dir`, that holds a `git` that fails when any of its arguments is `fail`, and
+/// otherwise runs git.
+pub fn fake_git(dir: &Path, fail: &str) -> PathBuf {
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("git"))
+        .find(|git| git.is_file())
+        .unwrap();
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = format!(
+        "#!/bin/sh\n\
+         for arg; do\n\
+         \x20 if [ \"$arg\" = '{fail}' ]; then echo \"fake git fails on $arg\" >&2; exit 1; fi\n\
+         done\n\
+         exec '{}' \"$@\"\n",
+        real.display()
+    );
+    let git = bin.join("git");
+    std::fs::write(&git, script).unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// The lock of the notes ref, which keeps every other writer from moving it while it exists.
+pub fn notes_lock(repo: &Path) -> PathBuf {
+    let dir = repo.join(".git/refs/notes");
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("replaces.lock")
+}
+
+/// The lines of the abandoned records of `repo`, oldest record first.
+pub fn abandoned(repo: &Path) -> Vec<String> {
+    let dir = repo.join(".git/replaces-abandoned");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<_> = entries
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+        .iter()
+        .flat_map(|name| {
+            let text = std::fs::read_to_string(dir.join(name)).unwrap();
+            text.lines().map(str::to_owned).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The command that the hook prints to record `lines` by hand, up to the program it pipes them to.
+pub fn printed(lines: &[String]) -> String {
+    let quoted: Vec<String> = lines.iter().map(|line| format!("'{line}'")).collect();
+    format!("printf '%s\\n' {} | ", quoted.join(" "))
 }

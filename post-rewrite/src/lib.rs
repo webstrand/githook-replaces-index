@@ -38,8 +38,29 @@ pub enum Kind {
 }
 
 /// Records the rewrite that `input` reports, one `<old> <new>` line per rewritten commit.
-pub fn post_rewrite(kind: Kind, input: &str) -> Result<(), Error> {
-    let mut rewrite = Rewrite::parse(input);
+pub fn post_rewrite(kind: Kind, input: &str) -> Result<(), Failure> {
+    let reported = Rewrite::parse(input);
+    let rewrite = resolve(kind, reported.clone()).map_err(|error| Failure {
+        error,
+        rewrite: reported,
+    })?;
+    replaces_index_record::record(&rewrite).map_err(|error| Failure {
+        error: Error::Record(error),
+        rewrite,
+    })
+}
+
+/// A rewrite that could not be recorded, and why.
+#[derive(Debug)]
+pub struct Failure {
+    pub error: Error,
+    /// What remains to be recorded: every commit of the rewrite that was not set aside.
+    pub rewrite: Rewrite,
+}
+
+/// What of `rewrite` is to be recorded now: during a rebase, the amends of commits that the rebase
+/// made are set aside, and the replacements it reports when it ends are followed through them.
+fn resolve(kind: Kind, mut rewrite: Rewrite) -> Result<Rewrite, Error> {
     match (kind, rebase_state()?) {
         (Kind::Amend, Some(state)) => {
             let mut aside = Vec::new();
@@ -60,7 +81,7 @@ pub fn post_rewrite(kind: Kind, input: &str) -> Result<(), Error> {
         }
         _ => {}
     }
-    replaces_index_record::record(&rewrite).map_err(Error::Record)
+    Ok(rewrite)
 }
 
 /// The file of the rebase's state directory in which the hook sets amends aside.
