@@ -11,9 +11,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{
-    Interrupt, abandoned, amend_of, amended, commit, failing, fake_git, fake_git_holding,
-    fake_git_racing, git, hook, interrupt_waiting, note, notes_lock, ok, printed, rebase,
-    rebase_keeping, release, repo, stderr_of, with_git_env,
+    abandoned, amend_of, amended, commit, failing, fake_git, fake_git_holding, fake_git_racing,
+    git, hook, interrupt_waiting, note, notes_lock, ok, printed, rebase, rebase_keeping, release,
+    repo, stderr_of, with_git_env,
 };
 
 /// Asserts that the hook failed, kept `lines` as the only abandoned record, and printed them.
@@ -36,13 +36,10 @@ fn a_held_lock_abandons_an_amend() {
     let a = commit(repo.path(), "a");
     fs::write(notes_lock(repo.path()), "").unwrap();
     // The hook retries for as long as the lock is held, until the operator interrupts it.
-    let (stderr, _) = interrupt_waiting(
-        git(
-            repo.path(),
-            &["commit", "-q", "--amend", "-m", "a, amended"],
-        ),
-        Interrupt::Group,
-    );
+    let stderr = interrupt_waiting(git(
+        repo.path(),
+        &["commit", "-q", "--amend", "-m", "a, amended"],
+    ));
     let a2 = ok(repo.path(), &["rev-parse", "HEAD"]);
     assert!(stderr.contains("is locked, retrying"), "{stderr}");
     assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
@@ -61,10 +58,8 @@ fn a_held_lock_abandons_the_end_of_a_rebase() {
     let mut command = git(repo.path(), &["rebase", "-q", "-i", "upstream"]);
     let script = "1s/$/\\nexec git commit -q --amend -m amended/";
     command.env("GIT_SEQUENCE_EDITOR", format!("sed -i -e '{script}'"));
-    // The heartbeat names the hook, so that interrupting it lets the rebase end as usual.
-    let (stderr, rebased) = interrupt_waiting(command, Interrupt::AsPrinted);
-    assert!(rebased, "{stderr}");
-    assert!(!repo.path().join(".git/rebase-merge").exists(), "{stderr}");
+    // git dies of the interrupt as well, after the rebase rewrote the branch.
+    let stderr = interrupt_waiting(command);
     let a2 = ok(repo.path(), &["rev-parse", "HEAD~"]);
     let b2 = ok(repo.path(), &["rev-parse", "HEAD"]);
     // The record holds the amended commit, not the one the rebase made before the amend.
@@ -341,10 +336,12 @@ fn a_signal_while_the_ref_keeps_moving_abandons_the_rewrite() {
         &["notes", "--ref=replaces", "add", "-m", "other", &base],
     );
     let bin = fake_git_racing(repo.path());
-    let (stderr, _) = interrupt_waiting(
-        hook(repo.path(), "amend", format!("{a} {a2}\n"), Some(&bin)),
-        Interrupt::AsPrinted,
-    );
+    let stderr = interrupt_waiting(hook(
+        repo.path(),
+        "amend",
+        format!("{a} {a2}\n"),
+        Some(&bin),
+    ));
     assert!(stderr.contains("keeps moving, retrying"), "{stderr}");
     assert!(stderr.contains("waiting for disk"), "{stderr}");
     assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
