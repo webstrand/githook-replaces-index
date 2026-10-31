@@ -412,3 +412,29 @@ fn a_ref_that_git_will_not_move_abandons_the_rewrite() {
     assert!(stderr.contains("fake git fails on update-ref"), "{stderr}");
     assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
 }
+
+#[test]
+fn a_reftable_lock_held_for_a_while_is_waited_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    ok(repo, &["init", "-q", "--ref-format=reftable"]);
+    ok(repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let a = commit(repo, "a");
+    let a2 = amend_of(repo, &a);
+    // A reftable repository locks every ref at once, with one lock for its list of tables.
+    let lock = repo.join(".git/reftable/tables.list.lock");
+    fs::write(&lock, "").unwrap();
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(2500));
+        fs::remove_file(lock).unwrap();
+    });
+    let output = hook(repo, "amend", format!("{a} {a2}\n"), None)
+        .output()
+        .unwrap();
+    release.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("is locked, retrying"), "{stderr}");
+    assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
+    assert!(abandoned(repo).is_empty());
+}

@@ -24,6 +24,7 @@ mod error;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::hash::{BuildHasher, RandomState};
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -169,7 +170,7 @@ enum Attempt {
     Moved,
     /// Another process held the lock of the ref.
     Locked,
-    /// git refused to move the ref, which did not move, and no lock of it was seen.
+    /// git refused to write the ref, or the staging ref, and no lock was seen.
     Refused(runner::Error),
 }
 
@@ -232,11 +233,18 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
 
     let ident = runner::stdout(&mut git(["var", "GIT_COMMITTER_IDENT"])).map_err(Error::Write)?;
     let stream = stream(staging, ident.trim_end(), parent.as_deref(), &changed);
-    runner::stdout_with_input(
+    // fast-import writes the staging ref, which a reftable repository locks along with every
+    // other ref.
+    if let Err(err) = runner::stdout_with_input(
         &mut git(["fast-import", "--quiet", "--force"]),
         stream.as_bytes(),
-    )
-    .map_err(Error::Write)?;
+    ) {
+        return if refs_locked()? {
+            Ok(Attempt::Locked)
+        } else {
+            Ok(Attempt::Refused(err))
+        };
+    }
     let commit = runner::stdout(&mut git([
         "rev-parse",
         "-q",
@@ -262,13 +270,33 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
     if notes_commit()? != parent {
         return Ok(Attempt::Moved);
     }
-    let lock =
-        runner::rev_parse_path(&["--git-path", &format!("{REF}.lock")]).map_err(Error::Write)?;
-    if lock.exists() {
+    if refs_locked()? {
         return Ok(Attempt::Locked);
     }
     let refused = runner::check(&update, &output).expect_err("update-ref failed");
     Ok(Attempt::Refused(refused))
+}
+
+/// Whether another process holds the lock of the ref: its own lock file in a repository that keeps
+/// refs as files, or the lock of the list of tables in one that keeps them in a reftable.
+fn refs_locked() -> Result<bool, Error> {
+    let out = runner::stdout(&mut git([
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-path",
+        &format!("{REF}.lock"),
+        "--git-common-dir",
+    ]))
+    .map_err(Error::Write)?;
+    let mut lines = out.lines().map(std::path::Path::new);
+    let ref_lock = lines.next().map(Path::to_owned);
+    let reftable = lines
+        .next()
+        .map(|common| common.join("reftable/tables.list.lock"));
+    Ok([ref_lock, reftable]
+        .into_iter()
+        .flatten()
+        .any(|lock| lock.exists()))
 }
 
 /// The commit that the ref points to, if it exists.
