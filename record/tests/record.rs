@@ -177,3 +177,42 @@ fn records_the_abandoned_records() {
     assert_eq!(note(repo, b), Some(replaces(&[a])));
     assert_eq!(std::fs::read_dir(&records).unwrap().count(), 0);
 }
+
+/// Holds the lock of the notes ref for 2.5 seconds, from now.
+fn lock_for_a_while(repo: &Path) -> std::thread::JoinHandle<()> {
+    let dir = repo.join(".git/refs/notes");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = dir.join("replaces.lock");
+    std::fs::write(&lock, "").unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        std::fs::remove_file(lock).unwrap();
+    })
+}
+
+#[test]
+fn says_what_it_waits_for() {
+    let (dir, ids) = repo(["a", "b"]);
+    let (repo, [a, b]) = (dir.path(), ids.each_ref());
+    let release = lock_for_a_while(repo);
+    let mut child = isolated(repo, RECORD, &[])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{a} {b}\n").as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    release.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("replaces-index: refs/notes/replaces is locked, retrying"),
+        "{stderr}"
+    );
+    assert_eq!(note(repo, b), Some(replaces(&[a])));
+}

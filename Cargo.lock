@@ -269,6 +269,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "replaces-index-post-rewrite",
+ "replaces-index-record",
  "replaces-index-runner",
  "tempfile",
  "thiserror",

@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use replaces_index_pull::{Pulled, pull};
-use replaces_index_record::REF;
+use replaces_index_record::{REF, heartbeat};
 
 #[derive(Parser)]
 #[command(name = "git pull-replaces", about)]
@@ -15,7 +15,9 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match pull(&cli.remote) {
+    let pulled =
+        heartbeat::while_running("pull-replaces", "Ctrl-C to give up", || pull(&cli.remote));
+    match pulled {
         Ok(Pulled::Merged) => ExitCode::SUCCESS,
         Ok(Pulled::Absent) => {
             eprintln!("pull-replaces: {} has no {REF}", cli.remote);

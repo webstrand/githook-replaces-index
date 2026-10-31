@@ -240,3 +240,29 @@ fn fast_forwards_from_the_commit_it_read() {
         git(theirs, &["rev-parse", REF])
     );
 }
+
+#[test]
+fn says_what_it_waits_for() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    let (a, b, x) = (id('a'), id('b'), id('e'));
+    note_add(theirs, &b, &format!("replaces: {a}\n"));
+    note_add(ours, &b, &format!("replaces: {x}\n"));
+    let lock = ours.join(".git/refs/notes/replaces.lock");
+    std::fs::write(&lock, "").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        std::fs::remove_file(lock).unwrap();
+    });
+    let (ok, _, stderr) = run(ours, PULL, &["origin"]);
+    release.join().unwrap();
+    assert!(ok, "{stderr}");
+    assert!(
+        stderr.contains("pull-replaces: refs/notes/replaces is locked, retrying"),
+        "{stderr}"
+    );
+    assert_eq!(note(ours, &b), format!("replaces: {a}\nreplaces: {x}\n"));
+}

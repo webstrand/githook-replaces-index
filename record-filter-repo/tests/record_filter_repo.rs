@@ -123,3 +123,31 @@ fn keeps_no_copy_of_a_map_it_could_not_record() {
     // The copy would mean that the map was recorded, and a later run would compose with it.
     assert!(!dir.join("replaces-index-commit-map").exists());
 }
+
+#[test]
+fn says_what_it_waits_for() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo = repo.path();
+    assert!(run(repo, "git", &["init", "-q"]).0);
+    let dir = repo.join(".git/filter-repo");
+    fs::create_dir(&dir).unwrap();
+    let a = id('a');
+    let b = commit(repo, "b");
+    fs::write(dir.join("commit-map"), format!("old new\n{a} {b}\n")).unwrap();
+    let notes = repo.join(".git/refs/notes");
+    fs::create_dir_all(&notes).unwrap();
+    let lock = notes.join("replaces.lock");
+    fs::write(&lock, "").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        fs::remove_file(lock).unwrap();
+    });
+    let (ok, _, stderr) = run(repo, RECORD, &[]);
+    release.join().unwrap();
+    assert!(ok, "{stderr}");
+    assert!(
+        stderr.contains("replaces-index: refs/notes/replaces is locked, retrying"),
+        "{stderr}"
+    );
+    assert_eq!(note(repo, &b), format!("replaces: {a}\n"));
+}

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use replaces_index_post_rewrite::{Error, Failure, Kind, post_rewrite};
-use replaces_index_record::{REF, Retry, Rewrite, abandoned};
+use replaces_index_record::{Rewrite, abandoned};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 use signal_hook::iterator::Signals;
 
@@ -38,7 +38,7 @@ const SIGNALS: [i32; 4] = [SIGINT, SIGTERM, SIGHUP, SIGQUIT];
 const PATIENCE: Duration = Duration::from_secs(60);
 
 /// How often the hook says what it waits for, once it has taken that long.
-const HEARTBEAT: Duration = Duration::from_secs(1);
+const HEARTBEAT: Duration = replaces_index_record::heartbeat::EVERY;
 
 enum Event {
     Signal(i32),
@@ -223,29 +223,10 @@ impl Hook {
 
 /// What the hook waits for, `elapsed` after it started.
 fn heartbeat(elapsed: Duration) -> String {
-    let seconds = elapsed.as_secs();
     // Only the hook is to be interrupted: Ctrl-C would end git as well, and a rebase that ends
     // while its post-rewrite runs leaves its state behind, as though it were still under way.
-    let abandon = format!("kill {} to abandon", process::id());
-    let progress = replaces_index_record::progress();
-    let running = runner::running();
-    let waiting = match running.first() {
-        Some(command) => format!("waiting for {command}"),
-        None => "recording".to_owned(),
-    };
-    match progress.retrying {
-        Some(retry) => {
-            let why = match retry {
-                Retry::Moved => "keeps moving",
-                Retry::Locked => "is locked",
-            };
-            format!(
-                "{REF} {why}, retrying (attempt {}, {seconds}s; {abandon})",
-                progress.attempt
-            )
-        }
-        None => format!("{waiting} ({seconds}s; {abandon})"),
-    }
+    let stop = format!("kill {} to abandon", process::id());
+    replaces_index_record::heartbeat::line(elapsed, &stop)
 }
 
 /// Has the ref that the writer staged the notes in removed, if it was writing. The git that removes

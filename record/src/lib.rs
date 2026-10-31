@@ -20,6 +20,7 @@
 
 pub mod abandoned;
 mod error;
+pub mod heartbeat;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;

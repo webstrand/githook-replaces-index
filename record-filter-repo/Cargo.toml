@@ -11,6 +11,7 @@ clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 runner = { package = "replaces-index-runner", path = "../runner" }
 replaces-index-post-rewrite = { path = "../post-rewrite" }
+replaces-index-record = { path = "../record" }
 
 [dev-dependencies]
 tempfile = "3"

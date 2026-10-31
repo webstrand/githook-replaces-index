@@ -21,6 +21,7 @@ use std::sync::Mutex;
 
 use clap::Parser;
 use replaces_index_post_rewrite::{Kind, post_rewrite};
+use replaces_index_record::heartbeat;
 
 use crate::error::Error;
 
@@ -57,11 +58,10 @@ fn run() -> Result<(), Error> {
     };
     let prev = read_or_empty(&prev_path)?;
 
-    post_rewrite(
-        Kind::FilterRepo,
-        &replacements(&map, &prev),
-        &Mutex::new(None),
-    )
+    let replacements = replacements(&map, &prev);
+    heartbeat::while_running("replaces-index", "Ctrl-C to give up", || {
+        post_rewrite(Kind::FilterRepo, &replacements, &Mutex::new(None))
+    })
     .map_err(|failure| Error::Record(failure.error))?;
     // The copy is kept only once the map is recorded, so that a failed run is retried in full.
     fs::copy(&map_path, &prev_path).map_err(|source| Error::Keep {

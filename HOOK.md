@@ -48,7 +48,7 @@ replaces-index: refs/notes/replaces is locked, retrying (attempt 14, 5s; kill 42
 replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; kill 4242 to abandon)
 ```
 
-The operator should interrupt the hook alone, rather than press Ctrl-C, which interrupts git as well: git runs `post-rewrite` once the rewrite is complete, and a rebase interrupted while it runs leaves its state directory behind, so that git takes the finished rebase for one under way.
+The operator should interrupt the hook alone, rather than press Ctrl-C, which interrupts git as well: git runs `post-rewrite` once the rewrite is complete, and a rebase interrupted while it runs leaves its state directory behind, so that git takes the finished rebase for one under way. `replaces-index-record`, `record-filter-repo` and `git pull-replaces` print the same lines, which end with `Ctrl-C to give up` instead: nothing waits on them, and running them again does what they did not finish.
 
 - An amend records that the new commit was made from the amended one.
 - A rebase records the same for each commit it creates.

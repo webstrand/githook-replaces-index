@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::process::ExitCode;
 
 use clap::Parser;
-use replaces_index_record::{Error, Rewrite, abandoned, record};
+use replaces_index_record::{Error, Rewrite, abandoned, heartbeat, record};
 
 #[derive(Parser)]
 #[command(name = "record", about)]
@@ -44,6 +44,6 @@ fn run(cli: &Cli) -> Result<(), Error> {
     rewrite
         .replacements
         .extend(Rewrite::parse(&input).replacements);
-    record(&rewrite)?;
+    heartbeat::while_running("replaces-index", "Ctrl-C to give up", || record(&rewrite))?;
     waiting.remove()
 }
