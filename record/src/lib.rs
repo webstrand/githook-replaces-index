@@ -121,11 +121,13 @@ enum Change<'a> {
 /// ref holds it.
 fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
     *progress_mut() = Progress::default();
+    // Found on the first attempt that writes a commit, and kept for the retries.
+    let mut ident = None;
     let mut ceiling = FIRST_WAIT;
     let mut refusals = 0;
     loop {
         progress_mut().attempt += 1;
-        let retry = match attempt(change)? {
+        let retry = match attempt(change, &mut ident)? {
             Attempt::Written => {
                 written();
                 return Ok(());
@@ -207,7 +209,7 @@ fn random() -> u64 {
 }
 
 /// Writes the notes once.
-fn attempt(change: Change) -> Result<Attempt, Error> {
+fn attempt(change: Change, ident: &mut Option<String>) -> Result<Attempt, Error> {
     let parent = notes_commit()?;
     let (changed, theirs) = match change {
         Change::Rewrite(rewrite) => {
@@ -217,7 +219,7 @@ fn attempt(change: Change) -> Result<Attempt, Error> {
                 .flat_map(|(old, new)| [old.as_str(), new.as_str()])
                 .collect();
             let current = match &parent {
-                Some(_) => read(&involved)?,
+                Some(parent) => read(parent, &involved)?,
                 None => Notes::new(),
             };
             (Changed::ByCommit(notes_of(&current, rewrite)), None)
@@ -237,8 +239,15 @@ fn attempt(change: Change) -> Result<Attempt, Error> {
         return Ok(Attempt::Written);
     }
 
-    let ident = runner::stdout(&mut git(["var", "GIT_COMMITTER_IDENT"])).map_err(Error::Write)?;
-    let stream = stream(ident.trim_end(), parent.as_deref(), theirs, &changed);
+    let ident = match ident {
+        Some(ident) => ident,
+        None => {
+            let found =
+                runner::stdout(&mut git(["var", "GIT_COMMITTER_IDENT"])).map_err(Error::Write)?;
+            ident.insert(found.trim_end().to_owned())
+        }
+    };
+    let stream = stream(ident, parent.as_deref(), theirs, &changed);
     // Without --force, fast-import moves the ref only to a commit that holds the one it points at
     // when fast-import moves it, which a writer that came in between has moved it from.
     match runner::stdout_with_input(&mut git(["fast-import", "--quiet"]), stream.as_bytes()) {
@@ -407,24 +416,40 @@ fn notes_commit() -> Result<Option<String>, Error> {
     Ok(Some(id.to_owned()))
 }
 
-/// The notes of the commits `wanted`, those that have one.
-fn read(wanted: &BTreeSet<&str>) -> Result<Notes, Error> {
-    // `<blob> <annotated commit>` for every note.
-    let list = runner::stdout(&mut git(["notes", &format!("--ref={REF}"), "list"]))
-        .map_err(Error::Read)?;
-    let (commits, blobs): (Vec<&str>, Vec<&str>) = list
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .map(|(blob, commit)| (commit, blob))
-        .filter(|(commit, _)| wanted.contains(commit))
-        .unzip();
-    let contents = runner::cat_file(&blobs).map_err(Error::Read)?;
-    let mut notes = Notes::new();
-    for (commit, text) in commits.into_iter().zip(contents) {
-        let text = String::from_utf8_lossy(text.as_deref().unwrap_or_default()).into_owned();
-        notes.insert(commit.to_owned(), text.lines().map(str::to_owned).collect());
+/// The deepest fanout of a notes tree that a lookup tries: each level splits two more hex digits
+/// off the path of a note, and git adds one for every factor of 256 in the number of notes.
+const FANOUT: usize = 3;
+
+/// The notes of the commits `wanted` in the notes commit `notes`, those that have one. Each is
+/// looked for at each depth of fanout, by one `git cat-file`, rather than by listing every note.
+fn read(notes: &str, wanted: &BTreeSet<&str>) -> Result<Notes, Error> {
+    let mut specs = Vec::new();
+    for commit in wanted {
+        for depth in 0..=FANOUT.min(commit.len() / 2 - 1) {
+            let (dirs, rest) = commit.split_at(2 * depth);
+            let mut path = String::new();
+            for pair in dirs.as_bytes().chunks(2) {
+                path.push_str(std::str::from_utf8(pair).unwrap_or_default());
+                path.push('/');
+            }
+            path.push_str(rest);
+            specs.push((*commit, format!("{notes}:{path}")));
+        }
     }
-    Ok(notes)
+    let names: Vec<&str> = specs.iter().map(|(_, spec)| spec.as_str()).collect();
+    let contents = runner::cat_file(&names).map_err(Error::Read)?;
+    let mut found = Notes::new();
+    for ((commit, _), text) in specs.iter().zip(contents) {
+        let Some(text) = text else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&text);
+        found
+            .entry((*commit).to_owned())
+            .or_default()
+            .extend(text.lines().map(str::to_owned));
+    }
+    Ok(found)
 }
 
 /// The notes that `rewrite` changes, given the `current` notes of the commits it involves, each

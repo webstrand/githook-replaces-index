@@ -182,11 +182,6 @@ fn a_failed_lookup_of_the_committer_abandons_the_rewrite() {
 }
 
 #[test]
-fn a_failed_listing_of_the_notes_abandons_the_rewrite() {
-    abandons_when_git_fails("notes", true);
-}
-
-#[test]
 fn a_failed_read_of_the_notes_abandons_the_rewrite() {
     abandons_when_git_fails("cat-file", true);
 }

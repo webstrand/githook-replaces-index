@@ -216,3 +216,52 @@ fn says_what_it_waits_for() {
     );
     assert_eq!(note(repo, b), Some(replaces(&[a])));
 }
+
+/// Makes the notes ref a commit whose tree holds only a note of `lines` at `path`, as git stores a
+/// note when its tree has a fanout.
+fn note_at(repo: &Path, path: &str, lines: &str) {
+    let index = repo.join(".git/note-index");
+    let with_index = |args: &[&str], input: Option<&str>| -> String {
+        let mut command = isolated(repo, "git", args);
+        command
+            .env("GIT_INDEX_FILE", &index)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.unwrap_or("").as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{args:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    let blob = with_index(&["hash-object", "-w", "--stdin"], Some(lines));
+    with_index(&["read-tree", "--empty"], None);
+    let info = format!("100644,{blob},{path}");
+    with_index(&["update-index", "--add", "--cacheinfo", &info], None);
+    let tree = with_index(&["write-tree"], None);
+    let commit = with_index(&["commit-tree", &tree, "-m", "notes"], None);
+    git(repo, &["update-ref", REF, &commit]).unwrap();
+}
+
+/// Records `b` to `c` over a note of `b` stored at `split` of its id.
+fn inherits_through_fanout(split: fn(&str) -> String) {
+    let (dir, ids) = repo(["a", "b", "c"]);
+    let (repo, [a, b, c]) = (dir.path(), ids.each_ref());
+    note_at(repo, &split(b), &format!("replaces: {a}\n"));
+    record(repo, &format!("{b} {c}\n"));
+    assert_eq!(note(repo, c), Some(replaces(&[a, b])));
+}
+
+#[test]
+fn reads_a_note_under_one_level_of_fanout() {
+    inherits_through_fanout(|id| format!("{}/{}", &id[..2], &id[2..]));
+}
+
+#[test]
+fn reads_a_note_under_two_levels_of_fanout() {
+    inherits_through_fanout(|id| format!("{}/{}/{}", &id[..2], &id[2..4], &id[4..]));
+}
