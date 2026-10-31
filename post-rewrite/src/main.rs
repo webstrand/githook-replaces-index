@@ -12,7 +12,7 @@
 use std::fmt::Display;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::process::{self, Command, ExitCode, Stdio};
+use std::process::{self, ExitCode};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -151,18 +151,13 @@ enum Ending {
 impl Hook {
     /// Keeps `rewrite`, if any, as an abandoned record, and prints the command that records it.
     /// Once a signal has arrived, it waits for the record at most `patience`, and a second signal
-    /// ends the wait; the first signal is returned. A signal also has the staging ref of the
-    /// writer removed, since the writer will not remove it.
+    /// ends the wait; the first signal is returned.
     fn abandon(&self, rewrite: Option<Rewrite>, mut signal: Option<i32>) -> (Option<i32>, Ending) {
         {
             let events = self.events.clone();
             let keep = Arc::clone(&self.keep);
             let rewrite = rewrite.clone();
-            let signalled = signal.is_some();
             thread::spawn(move || {
-                if signalled {
-                    remove_staging();
-                }
                 let kept = rewrite.map(|rewrite| keep(&rewrite));
                 let _ = events.send(Event::Kept(kept));
             });
@@ -227,20 +222,6 @@ fn heartbeat(elapsed: Duration) -> String {
     // while its post-rewrite runs leaves its state behind, as though it were still under way.
     let stop = format!("kill {} to abandon", process::id());
     replaces_index_record::heartbeat::line(elapsed, &stop)
-}
-
-/// Has the ref that the writer staged the notes in removed, if it was writing. The git that removes
-/// it is not waited for, and carries on once the hook has ended.
-fn remove_staging() {
-    if let Some(staging) = replaces_index_record::staging() {
-        // Started outside runner, which starts nothing once the hook is stopping.
-        let _ = Command::new("git")
-            .args(["update-ref", "-d", &staging])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-    }
 }
 
 /// Prints what became of `rewrite`, and the command that records it by hand.

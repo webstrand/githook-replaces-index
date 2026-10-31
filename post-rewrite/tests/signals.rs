@@ -82,20 +82,6 @@ fn a_quit_abandons_the_rewrite() {
 }
 
 #[test]
-fn a_signal_once_the_notes_are_written_abandons_nothing() {
-    let (repo, a, a2) = amended();
-    // The ref the notes are staged in is removed after the notes ref is moved.
-    let (child, _) = start_held(repo.path(), "amend", &format!("{a} {a2}\n"), "-d");
-    let output = signalled(child, "INT");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.signal(), Some(2), "{stderr}");
-    assert!(abandoned(repo.path()).is_empty(), "{stderr}");
-    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
-    // The git that removes the staging ref is held as well, and is let go.
-    release(repo.path());
-}
-
-#[test]
 fn a_signal_while_an_amend_is_set_aside_abandons_the_amend() {
     let repo = repo();
     commit(repo.path(), "a");

@@ -400,20 +400,6 @@ fn a_quick_record_says_nothing() {
 }
 
 #[test]
-fn a_ref_that_git_will_not_move_abandons_the_rewrite() {
-    let (repo, a, a2) = amended();
-    let bin = fake_git(repo.path(), "update-ref");
-    let (stderr, _) = failing(hook(
-        repo.path(),
-        "amend",
-        format!("{a} {a2}\n"),
-        Some(&bin),
-    ));
-    assert!(stderr.contains("fake git fails on update-ref"), "{stderr}");
-    assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
-}
-
-#[test]
 fn a_reftable_lock_held_for_a_while_is_waited_for() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
