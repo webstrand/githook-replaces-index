@@ -268,6 +268,10 @@ fn print_command(what: &str, rewrite: Option<&Rewrite>) {
     // A standard error that cannot be written to, for instance once the terminal is gone, leaves
     // the record kept all the same.
     let _ = writeln!(io::stderr(), "{}", abandoned::command(rewrite));
+    say(format_args!(
+        "the next rewrite records every abandoned record, as does {}",
+        abandoned::command_all()
+    ));
 }
 
 /// Ends the process as `signal` would have.

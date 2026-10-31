@@ -23,7 +23,7 @@ The programs are written in Rust, each a crate in the directory of its name, in 
 | Program | Role |
 | - | - |
 | `post-rewrite` | records the commits that each amend and rebase made |
-| `record` | writes the notes of the commits that a rewrite made |
+| `record` | writes the notes of the commits that a rewrite made, and of the abandoned records |
 | `whereis` | `git whereis <commit>`: prints the commits related to a commit by rewrites, and the refs that hold them |
 | `compare` | `git compare-replaces <old> <new>`: tells what one chain holds of each commit of another |
 | `pull` | `git pull-replaces <remote>`: merges a remote's replaces notes into the local ones |
@@ -80,6 +80,7 @@ Git passes a rewrite to `post-rewrite` once only. When the hook cannot record it
 replaces-index: <error>
 replaces-index: the rewrite was kept in <path>; to record it by hand:
 printf '%s\n' '<old> <new>' … | "$(git rev-parse --git-common-dir)"/bin/replaces-index-record
+replaces-index: the next rewrite records every abandoned record, as does "$(git rev-parse --git-common-dir)"/bin/replaces-index-record --abandoned
 ```
 
 The hook then exits with a failure status, which git ignores: the rewrite itself is complete. At the end of a rebase, the record holds the replacements as the hook would have recorded them, after they were followed through the amends set aside.
@@ -88,7 +89,7 @@ Each record is a file of `<old> <new>` lines in `replaces-abandoned/` in the com
 
 A signal that ends the hook, `SIGINT`, `SIGTERM`, `SIGHUP` or `SIGQUIT`, before the notes ref holds the rewrite makes it end the git commands it runs, start no other, and keep what remained to be recorded as an abandoned record. It says so, `unable to note replaces, abandoning state, waiting for disk (60s timeout; signal again to skip)`, waits at most a minute for the record to be written, and prints the command; a second signal ends the wait at once. It then ends as the first signal would have ended it. A signal once the notes ref holds the rewrite ends it at once. In both cases, the hook has the ref it staged the notes in removed. A signal that stops the hook, such as that of Ctrl-Z, stops it and its git commands as usual, and they carry on once continued.
 
-No program records abandoned records yet: the operator must run the printed command, after which the record may be deleted.
+Each run of the hook, `record-filter-repo` included, records the abandoned records before its own rewrite, oldest first, so that a later replacement inherits what an earlier one records, and removes them once the notes ref holds them, or held them already. `replaces-index-record` does the same before the rewrite on its standard input, so that the printed command removes the record it came from, and `replaces-index-record --abandoned` records the abandoned records alone. A line that is not a replacement, and a replacement whose new commit the clone lacks, for instance once garbage collection removed it, could never be recorded: they are left out with a warning, and removed with their record. A file whose name begins with `.` is one being written, and is left alone. When the rewrite cannot be recorded, the records stay as they are, and the rewrite is kept in a record of its own. Two runs may record the same records at once: recording a replacement again changes nothing, and a record that the other run removed already is not missed.
 
 ## Index
 

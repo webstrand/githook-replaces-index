@@ -1,12 +1,13 @@
 //! Rewrites that could not be recorded, each kept as a file of `<old> <new>` lines in
 //! `replaces-abandoned/` in the common git directory, so that they may be recorded later.
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::Rewrite;
+use crate::{Error, Rewrite};
 
 /// The directory of the common git directory that holds the abandoned rewrites.
 pub const DIR: &str = "replaces-abandoned";
@@ -51,6 +52,9 @@ fn name() -> String {
     )
 }
 
+/// The program that records rewrites, as a shell names it from inside the repository.
+const RECORD: &str = "\"$(git rev-parse --git-common-dir)\"/bin/replaces-index-record";
+
 /// A shell command that records `rewrite` by hand, from inside the repository.
 pub fn command(rewrite: &Rewrite) -> String {
     let lines: Vec<String> = rewrite
@@ -58,10 +62,134 @@ pub fn command(rewrite: &Rewrite) -> String {
         .iter()
         .map(|(old, new)| format!("'{old} {new}'"))
         .collect();
-    format!(
-        "printf '%s\\n' {} | \"$(git rev-parse --git-common-dir)\"/bin/replaces-index-record",
-        lines.join(" ")
-    )
+    format!("printf '%s\\n' {} | {RECORD}", lines.join(" "))
+}
+
+/// A shell command that records every abandoned record, from inside the repository.
+pub fn command_all() -> String {
+    format!("{RECORD} --abandoned")
+}
+
+/// The abandoned records in a directory, read to be recorded.
+#[derive(Debug, Default)]
+pub struct Waiting {
+    /// The records read, to be removed once recorded.
+    pub files: Vec<PathBuf>,
+    /// Their replacements, oldest record first, without those that cannot be recorded.
+    pub rewrite: Rewrite,
+    /// Why lines of the records were left out.
+    pub dropped: Vec<String>,
+}
+
+impl Waiting {
+    /// Removes the records read, once their replacements are recorded. A record that another
+    /// process removed already is not missed.
+    pub fn remove(&self) -> Result<(), Error> {
+        for path in &self.files {
+            match fs::remove_file(path) {
+                Err(err) if err.kind() != io::ErrorKind::NotFound => {
+                    return Err(Error::Abandoned {
+                        path: path.clone(),
+                        source: err,
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The abandoned records in `dir`, oldest first. A file whose name begins with `.` is one being
+/// written, and is left alone. Lines that are no replacement, and replacements whose new commit
+/// the clone lacks, which could never be recorded, are left out.
+pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
+    let to_error = |source| Error::Abandoned {
+        path: dir.to_owned(),
+        source,
+    };
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Waiting::default()),
+        Err(err) => return Err(to_error(err)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let name = entry.map_err(to_error)?.file_name();
+        if let Some(name) = name.to_str().filter(|name| !name.starts_with('.')) {
+            names.push(name.to_owned());
+        }
+    }
+    names.sort();
+    let mut waiting = Waiting::default();
+    for name in names {
+        let path = dir.join(&name);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            // Another process recorded it and removed it in the meantime.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(Error::Abandoned { path, source }),
+        };
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            match words[..] {
+                [old, new] if is_id(old) && is_id(new) => {
+                    waiting
+                        .rewrite
+                        .replacements
+                        .push((old.to_owned(), new.to_owned()));
+                }
+                _ => waiting
+                    .dropped
+                    .push(format!("{}: `{line}` is not a replacement", path.display())),
+            }
+        }
+        waiting.files.push(path);
+    }
+    let news: Vec<&str> = waiting
+        .rewrite
+        .replacements
+        .iter()
+        .map(|(_, new)| new.as_str())
+        .collect();
+    let missing = missing(&news).map_err(Error::Read)?;
+    waiting.rewrite.replacements.retain(|(old, new)| {
+        let kept = !missing.contains(new);
+        if !kept {
+            waiting.dropped.push(format!(
+                "{new} is not in this clone, so `{old} {new}` cannot be recorded"
+            ));
+        }
+        kept
+    });
+    Ok(waiting)
+}
+
+/// Whether `word` is the full id of an object.
+fn is_id(word: &str) -> bool {
+    matches!(word.len(), 40 | 64) && word.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Those of `ids` that name no commit of the repository.
+fn missing(ids: &[&str]) -> Result<HashSet<String>, runner::Error> {
+    if ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let input: String = ids.iter().map(|id| format!("{id}\n")).collect();
+    let mut command = runner::git(["cat-file", "--batch-check=%(objectname) %(objecttype)"]);
+    let out = runner::stdout_with_input(&mut command, input.as_bytes())?;
+    // Each line is `<id> <type>`, or `<id> missing`.
+    let found: HashSet<&str> = out
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(_, kind)| *kind == "commit")
+        .map(|(id, _)| id)
+        .collect();
+    Ok(ids
+        .iter()
+        .filter(|id| !found.contains(*id))
+        .map(|id| (*id).to_owned())
+        .collect())
 }
 
 #[cfg(test)]

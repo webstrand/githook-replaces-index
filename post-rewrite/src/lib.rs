@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use replaces_index_record::Rewrite;
+use replaces_index_record::abandoned::{self, Waiting};
 
 pub use crate::error::Error;
 
@@ -56,10 +57,44 @@ pub fn post_rewrite(
     hold(Some(reported.clone()));
     let rewrite = resolve(kind, reported);
     hold(Some(rewrite.clone()));
-    replaces_index_record::record_then(&rewrite, || hold(None)).map_err(|error| Failure {
+    // The abandoned records are recorded first, so that a rewrite that came later inherits what
+    // they record, and are removed once recorded; they stay where they are when recording fails.
+    let waiting = waiting();
+    let mut all = waiting.rewrite.clone();
+    all.replacements
+        .extend(rewrite.replacements.iter().cloned());
+    replaces_index_record::record_then(&all, || hold(None)).map_err(|error| Failure {
         error: Error::Record(error),
         rewrite,
-    })
+    })?;
+    if let Err(err) = waiting.remove() {
+        tell(format_args!(
+            "{err}; they are recorded again by the next rewrite"
+        ));
+    }
+    Ok(())
+}
+
+/// The abandoned records of the repository, read to be recorded; none when they cannot be read,
+/// which is said.
+fn waiting() -> Waiting {
+    let read = abandoned::dir()
+        .map_err(|err| err.to_string())
+        .and_then(|dir| abandoned::waiting(&dir).map_err(|err| err.to_string()));
+    match read {
+        Ok(waiting) => {
+            for dropped in &waiting.dropped {
+                tell(format_args!("{dropped}; it is left out"));
+            }
+            waiting
+        }
+        Err(err) => {
+            tell(format_args!(
+                "{err}; the abandoned records wait for a later rewrite"
+            ));
+            Waiting::default()
+        }
+    }
 }
 
 /// A rewrite that could not be recorded, and why.
@@ -133,7 +168,11 @@ fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
 
 /// Says why the rewrite is recorded in a cruder form than the hook would record.
 fn warn(err: Error, consequence: &str) {
-    let _ = writeln!(io::stderr(), "replaces-index: {err}; {consequence}");
+    tell(format_args!("{err}; {consequence}"));
+}
+
+fn tell(message: impl std::fmt::Display) {
+    let _ = writeln!(io::stderr(), "replaces-index: {message}");
 }
 
 /// The file of the rebase's state directory in which the hook sets amends aside.

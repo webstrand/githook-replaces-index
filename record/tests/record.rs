@@ -142,3 +142,38 @@ fn keeps_the_notes_of_a_merge_from_another_clone() {
     record(repo, &format!("{b} {c}\n"));
     assert_eq!(note(repo, c), Some(replaces(&[a, b, x])));
 }
+
+/// Runs `record --abandoned`, which must succeed, and returns its standard error.
+fn record_abandoned(repo: &Path) -> String {
+    let output = isolated(repo, RECORD, &["--abandoned"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "{stderr}");
+    stderr
+}
+
+#[test]
+fn records_nothing_when_nothing_was_abandoned() {
+    let (dir, _) = repo(["a"]);
+    let stderr = record_abandoned(dir.path());
+    assert_eq!(stderr, "");
+    assert_eq!(git(dir.path(), &["rev-parse", "-q", "--verify", REF]), None);
+}
+
+#[test]
+fn records_the_abandoned_records() {
+    let (dir, ids) = repo(["a", "b"]);
+    let (repo, [a, b]) = (dir.path(), ids.each_ref());
+    let records = repo.join(".git/replaces-abandoned");
+    std::fs::create_dir(&records).unwrap();
+    std::fs::write(
+        records.join("000000000001.000000000-0"),
+        format!("{a} {b}\n"),
+    )
+    .unwrap();
+    record_abandoned(repo);
+    assert_eq!(note(repo, b), Some(replaces(&[a])));
+    assert_eq!(std::fs::read_dir(&records).unwrap().count(), 0);
+}
