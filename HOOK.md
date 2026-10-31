@@ -40,15 +40,15 @@ Git runs `post-rewrite` after `git commit --amend` and after a rebase, with one 
 
 `record` writes the commit through `git fast-import`, without `--force`, which moves `refs/notes/replaces` to it only if the commit holds the one the ref points at: a writer that moved the ref after `record` read it put there a commit that `record`'s does not hold. When git refuses to move the notes ref, `record` reads it again. If another writer, such as a rebase in another worktree, moved it in the meantime, `record` reads the notes again and retries. If it did not move and its lock is held, `record` retries as well: the lock is `refs/notes/replaces.lock` in a repository that keeps refs as files, and `reftable/tables.list.lock`, which locks every ref at once, in one that keeps them in a reftable. A refusal with no lock in sight is taken for one that will not end once it recurs three times in a row, and `record` then fails. Before each retry, `record` waits a random time up to a ceiling that starts at 50 milliseconds and doubles with each retry up to a second, so that writers that collided spread out. It retries for as long as the ref keeps moving or stays locked: no write therefore replaces another, and a process that must end sooner is ended by a signal. No git command it runs is given a time limit either, since a repository on a network filesystem may answer slowly.
 
-Once the hook has run for a second, it prints what it waits for every second, until it ends, and the command that interrupts it alone:
+Once the hook has run for a second, it prints what it waits for every second, until it ends:
 
 ```
-replaces-index: waiting for git fast-import --quiet (3s; kill 4242 to abandon)
-replaces-index: refs/notes/replaces is locked, retrying (attempt 14, 5s; kill 4242 to abandon)
-replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; kill 4242 to abandon)
+replaces-index: waiting for git fast-import --quiet (3s; Ctrl-C to abandon)
+replaces-index: refs/notes/replaces is locked, retrying (attempt 14, 5s; Ctrl-C to abandon)
+replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; Ctrl-C to abandon)
 ```
 
-The operator should interrupt the hook alone, rather than press Ctrl-C, which interrupts git as well: git runs `post-rewrite` once the rewrite is complete, and a rebase interrupted while it runs leaves its state directory behind, so that git takes the finished rebase for one under way. `replaces-index-record`, `record-filter-repo` and `git pull-replaces` print the same lines, which end with `Ctrl-C to give up` instead: nothing waits on them, and running them again does what they did not finish.
+`replaces-index-record`, `record-filter-repo` and `git pull-replaces` print the same lines, which end with `Ctrl-C to give up` instead, since running them again does what they did not finish.
 
 - An amend records that the new commit was made from the amended one.
 - A rebase records the same for each commit it creates.
