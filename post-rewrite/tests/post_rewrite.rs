@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{commit, note, ok, rebase, rebase_keeping, repo};
+use common::{commit, note, ok, rebase, rebase_keeping, refuse_unchecked_writes, repo};
 
 #[test]
 fn an_amend_stands_in_place_of_the_amended_commit() {
@@ -122,4 +122,24 @@ fn a_rebase_records_an_amend_of_the_commit_it_rebases_onto() {
     assert_eq!(ok(repo.path(), &["rev-parse", "HEAD~"]), base2);
     assert_eq!(note(repo.path(), &base2), [format!("replaces: {base}")]);
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+}
+
+#[test]
+fn every_write_moves_the_ref_from_the_commit_it_read() {
+    let repo = repo();
+    commit(repo.path(), "a");
+    ok(
+        repo.path(),
+        &["commit", "-q", "--amend", "-m", "a, amended"],
+    );
+    refuse_unchecked_writes(repo.path());
+    ok(
+        repo.path(),
+        &["commit", "-q", "--amend", "-m", "a, amended twice"],
+    );
+    commit(repo.path(), "b");
+    rebase(repo.path(), "HEAD~2", "2s/^pick/fixup/");
+    let head = ok(repo.path(), &["rev-parse", "HEAD"]);
+    // `a`, its two amends, and `b`.
+    assert_eq!(note(repo.path(), &head).len(), 4);
 }

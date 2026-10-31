@@ -131,7 +131,7 @@ Each line ends with the commit's subject. Nothing of `old` is lost in `new` when
 Each clone records the rewrites made in it. `git pull-replaces <remote>` merges a remote's notes into the local ones:
 
 1. It fetches the remote's `refs/notes/replaces` into `refs/notes/remotes/<remote>/replaces`. The fetch names its refspec itself, so the remote needs no configuration.
-2. It merges that into the local `refs/notes/replaces` with the `cat_sort_uniq` strategy, which takes the union of the notes' lines and never conflicts.
+2. It merges that into the local `refs/notes/replaces` as `record` writes it: the merge takes the union of each note's lines, which never conflicts, keeps the remote's notes commit as a parent, and moves the ref only from the commit it read, retrying as `record` does. When either notes commit holds the other, the ref is left as it is, or moved to the remote's.
 
 Lines are only ever added to notes, so the union is the whole merge. The remote is not changed. Two clones that each record rewrites hold the same notes once each has pulled from the other, after the last rewrite in either; a host that cannot reach the operator's clone receives no notes from it. A clone may pull from several remotes in turn.
 
@@ -168,4 +168,5 @@ When filter-repo runs on a repository it has already filtered, it composes the n
 - Notes name commits by id only. A commit that is no longer reachable is eventually removed by garbage collection, after which its id can still be looked up but its contents cannot be read.
 - A rebase interrupted while its `post-rewrite` hooks run, for instance by Ctrl-C, has already rewritten the branch, but leaves `rebase-merge/` behind, so that `git status` reports a rebase under way. The operator must end it with `git rebase --quit`, which keeps the branch as it is: `git rebase --abort` would reset the branch to where it was before the rebase.
 - A hook ended by `SIGKILL`, which cannot be handled, loses the rewrite it was recording, and leaves the ref it staged the notes in, under `refs/replaces-index/`, which nothing reads.
+- `git notes` moves a notes ref without naming the commit it moved it from, so that a `git notes` command on `refs/notes/replaces`, or a note that git copies to it on a rewrite when `notes.rewriteRef` matches it, can drop a note that the hook writes at the same time. Every program of the replaces index moves the ref only from the commit it read.
 - `git notes --ref=replaces prune` must not be run: it removes the notes of every commit the clone lacks, including those of commits made in other clones.

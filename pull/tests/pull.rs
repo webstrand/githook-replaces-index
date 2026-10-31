@@ -167,3 +167,76 @@ fn fails_when_the_remote_cannot_be_reached() {
         "{stderr}"
     );
 }
+
+/// Makes every update of the notes ref in `repo` fail unless it names the commit it moves the ref
+/// from, as a writer that cannot overwrite a concurrent write does. Creating the ref is let be.
+fn refuse_unchecked_writes(repo: &Path) {
+    let hook = repo.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    let zero = "0".repeat(40);
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\n\
+             [ \"$1\" = prepared ] || exit 0\n\
+             while read old new ref; do\n\
+             \x20 if [ \"$ref\" = {REF} ] && [ \"$old\" = {zero} ] && git rev-parse -q --verify {REF} >/dev/null; then\n\
+             \x20   echo \"unchecked write of $ref\" >&2; exit 1\n\
+             \x20 fi\n\
+             done\n"
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn merges_from_the_commit_it_read() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    let (a, b, x) = (id('a'), id('b'), id('e'));
+    note_add(theirs, &b, &format!("replaces: {a}\n"));
+    note_add(ours, &b, &format!("replaces: {x}\n"));
+    refuse_unchecked_writes(ours);
+
+    let (ok, _, stderr) = run(ours, PULL, &["origin"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(note(ours, &b), format!("replaces: {a}\nreplaces: {x}\n"));
+    // The merge keeps their history, so that a later pull of the same notes has nothing to do.
+    git(
+        ours,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "refs/notes/remotes/origin/replaces",
+            REF,
+        ],
+    );
+}
+
+#[test]
+fn fast_forwards_from_the_commit_it_read() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    let (a, b, c) = (id('a'), id('b'), id('c'));
+    note_add(theirs, &b, &format!("replaces: {a}\n"));
+    let (ok, _, stderr) = run(ours, PULL, &["origin"]);
+    assert!(ok, "{stderr}");
+    // Their notes move on, and ours, which hold nothing else, follow.
+    note_add(theirs, &c, &format!("replaces: {b}\n"));
+    refuse_unchecked_writes(ours);
+    let (ok, _, stderr) = run(ours, PULL, &["origin"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(note(ours, &c), format!("replaces: {b}\n"));
+    assert_eq!(
+        git(ours, &["rev-parse", REF]),
+        git(theirs, &["rev-parse", REF])
+    );
+}

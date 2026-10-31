@@ -88,17 +88,39 @@ pub fn record(rewrite: &Rewrite) -> Result<(), Error> {
 /// A writer retries for as long as other writers move the ref or hold its lock; `progress` tells
 /// how it fares, and a process that must end sooner ends it.
 pub fn record_then(rewrite: &Rewrite, written: impl FnOnce()) -> Result<(), Error> {
-    *progress_mut() = Progress::default();
     if rewrite.replacements.is_empty() {
+        *progress_mut() = Progress::default();
         written();
         return Ok(());
     }
+    write(Change::Rewrite(rewrite), written)
+}
+
+/// Merges the notes of the notes commit `theirs` into the ref, as `record` records a rewrite: the
+/// union of the lines of each note, written from the commit the ref was read at. The merge keeps
+/// `theirs` as a parent, so that merging it again changes nothing.
+pub fn merge(theirs: &str) -> Result<(), Error> {
+    write(Change::Merge(theirs), || {})
+}
+
+/// What a writer writes on top of the notes it reads.
+#[derive(Clone, Copy)]
+enum Change<'a> {
+    Rewrite(&'a Rewrite),
+    /// The notes of another notes commit.
+    Merge(&'a str),
+}
+
+/// Writes `change`, retrying while other writers move the ref, and calls `written` as soon as the
+/// ref holds it.
+fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
+    *progress_mut() = Progress::default();
     let staging = Staging::new();
     let mut ceiling = FIRST_WAIT;
     let mut refusals = 0;
     loop {
         progress_mut().attempt += 1;
-        let retry = match attempt(rewrite, &staging.0)? {
+        let retry = match attempt(change, &staging.0)? {
             Attempt::Written => {
                 written();
                 return Ok(());
@@ -215,24 +237,40 @@ fn random() -> u64 {
 }
 
 /// Writes the notes once.
-fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
+fn attempt(change: Change, staging: &str) -> Result<Attempt, Error> {
     let parent = notes_commit()?;
-    let involved: BTreeSet<&str> = rewrite
-        .replacements
-        .iter()
-        .flat_map(|(old, new)| [old.as_str(), new.as_str()])
-        .collect();
-    let current = match &parent {
-        Some(_) => read(&involved)?,
-        None => Notes::new(),
+    let (changed, theirs) = match change {
+        Change::Rewrite(rewrite) => {
+            let involved: BTreeSet<&str> = rewrite
+                .replacements
+                .iter()
+                .flat_map(|(old, new)| [old.as_str(), new.as_str()])
+                .collect();
+            let current = match &parent {
+                Some(_) => read(&involved)?,
+                None => Notes::new(),
+            };
+            (Changed::ByCommit(notes_of(&current, rewrite)), None)
+        }
+        Change::Merge(theirs) => match parent.as_deref() {
+            None => return move_ref(theirs, None),
+            Some(ours) if is_ancestor(theirs, ours)? => return Ok(Attempt::Written),
+            Some(ours) if is_ancestor(ours, theirs)? => return move_ref(theirs, Some(ours)),
+            Some(ours) => (Changed::ByPath(union(ours, theirs)?), Some(theirs)),
+        },
     };
-    let changed = notes_of(&current, rewrite);
     if changed.is_empty() {
         return Ok(Attempt::Written);
     }
 
     let ident = runner::stdout(&mut git(["var", "GIT_COMMITTER_IDENT"])).map_err(Error::Write)?;
-    let stream = stream(staging, ident.trim_end(), parent.as_deref(), &changed);
+    let stream = stream(
+        staging,
+        ident.trim_end(),
+        parent.as_deref(),
+        theirs,
+        &changed,
+    );
     // fast-import writes the staging ref, which a reftable repository locks along with every
     // other ref.
     if let Err(err) = runner::stdout_with_input(
@@ -252,14 +290,20 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
         &format!("{staging}^{{commit}}"),
     ]))
     .map_err(Error::Write)?;
+    move_ref(commit.trim_end(), parent.as_deref())
+}
+
+/// Moves the ref to `new`, only if it still points at `parent`, or does not exist when `parent` is
+/// `None`.
+fn move_ref(new: &str, parent: Option<&str>) -> Result<Attempt, Error> {
     // An empty old value requires that the ref does not exist yet.
     let mut update = git([
         "update-ref",
         "-m",
         "replaces-index: record",
         REF,
-        commit.trim_end(),
-        parent.as_deref().unwrap_or(""),
+        new,
+        parent.unwrap_or(""),
     ]);
     let output = runner::run(&mut update).map_err(Error::Write)?;
     if output.status.success() {
@@ -267,7 +311,7 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
     }
     // git refuses alike a ref that moved, one whose lock another process holds, and one it cannot
     // write at all; only reading the ref again, and looking for its lock, tells them apart.
-    if notes_commit()? != parent {
+    if notes_commit()?.as_deref() != parent {
         return Ok(Attempt::Moved);
     }
     if refs_locked()? {
@@ -275,6 +319,99 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
     }
     let refused = runner::check(&update, &output).expect_err("update-ref failed");
     Ok(Attempt::Refused(refused))
+}
+
+/// Whether commit `ancestor` is `descendant` or one of its ancestors.
+fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
+    let mut command = git(["merge-base", "--is-ancestor", ancestor, descendant]);
+    let output = runner::run(&mut command).map_err(Error::Read)?;
+    if output.status.code() == Some(1) {
+        return Ok(false);
+    }
+    runner::check(&command, &output).map_err(Error::Read)?;
+    Ok(true)
+}
+
+/// The notes that a writer writes: by the commit they annotate, which the clone has, or by their
+/// path in the notes tree, for the notes of another clone, which annotate commits the clone may
+/// lack.
+enum Changed {
+    ByCommit(Notes),
+    ByPath(Notes),
+}
+
+impl Changed {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::ByCommit(notes) | Self::ByPath(notes) => notes.is_empty(),
+        }
+    }
+}
+
+/// The notes of the notes commit `ours` that the union with those of `theirs` changes, by their
+/// path in the tree of `ours`, or of `theirs` for a note that `ours` lacks.
+fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
+    let our_files = note_files(ours)?;
+    let their_files = note_files(theirs)?;
+    // Each note of theirs that differs from ours, with ours if any.
+    let differing: Vec<(Option<&NoteFile>, &NoteFile)> = their_files
+        .iter()
+        .map(|(commit, theirs)| (our_files.get(commit), theirs))
+        .filter(|(ours, theirs)| ours.is_none_or(|ours| ours.blob != theirs.blob))
+        .collect();
+    let blobs: Vec<&str> = differing
+        .iter()
+        .flat_map(|(ours, theirs)| ours.iter().chain([theirs]).map(|file| file.blob.as_str()))
+        .collect();
+    // The contents of the blobs, in the order of `blobs`.
+    let mut contents = runner::cat_file(&blobs).map_err(Error::Read)?.into_iter();
+    let mut next_lines = || -> BTreeSet<String> {
+        let text = contents.next().flatten().unwrap_or_default();
+        String::from_utf8_lossy(&text)
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+    let mut changed = Notes::new();
+    for (ours, theirs) in differing {
+        let mut note = match ours {
+            Some(_) => next_lines(),
+            None => BTreeSet::new(),
+        };
+        let before = note.len();
+        note.extend(next_lines());
+        if ours.is_none() || note.len() != before {
+            let path = ours.unwrap_or(theirs).path.clone();
+            changed.insert(path, note);
+        }
+    }
+    Ok(changed)
+}
+
+/// A note as a file of the notes tree.
+struct NoteFile {
+    /// Its path, the annotated commit split by the fanout of the tree.
+    path: String,
+    blob: String,
+}
+
+/// The notes of the notes commit `notes`, by the commit they annotate.
+fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
+    let out = runner::stdout(&mut git(["ls-tree", "-r", "-z", notes])).map_err(Error::Read)?;
+    // `<mode> blob <blob>\t<path>` for each file.
+    Ok(out
+        .split('\0')
+        .filter_map(|entry| {
+            let (meta, path) = entry.split_once('\t')?;
+            let blob = meta.strip_prefix("100644 blob ")?;
+            let commit: String = path.chars().filter(|&c| c != '/').collect();
+            let file = NoteFile {
+                path: path.to_owned(),
+                blob: blob.to_owned(),
+            };
+            Some((commit, file))
+        })
+        .collect())
 }
 
 /// Whether another process holds the lock of the ref: its own lock file in a repository that keeps
@@ -364,11 +501,22 @@ fn notes_of(current: &Notes, rewrite: &Rewrite) -> Notes {
         .collect()
 }
 
-/// A fast-import stream for one commit on `staging` that sets `notes` on top of `parent`. The
-/// notes are written with `N`, which leaves the fanout of the notes tree to fast-import; every
-/// commit annotated is one that a rewrite in this clone created, which the clone therefore has.
-fn stream(staging: &str, ident: &str, parent: Option<&str>, notes: &Notes) -> String {
-    let message = "replaces-index: record\n";
+/// A fast-import stream for one commit on `staging` that sets `notes` on top of `parent`, and that
+/// merges `theirs`, if given. Notes by commit are written with `N`, which leaves the fanout of the
+/// notes tree to fast-import; every commit they annotate is one that a rewrite in this clone
+/// created, which the clone therefore has. Notes by path are written as files at that path.
+fn stream(
+    staging: &str,
+    ident: &str,
+    parent: Option<&str>,
+    theirs: Option<&str>,
+    notes: &Changed,
+) -> String {
+    let message = if theirs.is_some() {
+        "replaces-index: merge\n"
+    } else {
+        "replaces-index: record\n"
+    };
     let mut stream = format!(
         "commit {staging}\ncommitter {ident}\ndata {}\n{message}",
         message.len()
@@ -376,9 +524,29 @@ fn stream(staging: &str, ident: &str, parent: Option<&str>, notes: &Notes) -> St
     if let Some(parent) = parent {
         let _ = writeln!(stream, "from {parent}");
     }
-    for (commit, lines) in notes {
-        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
-        let _ = write!(stream, "N inline {commit}\ndata {}\n{text}\n", text.len());
+    if let Some(theirs) = theirs {
+        let _ = writeln!(stream, "merge {theirs}");
+    }
+    let text = |lines: &BTreeSet<String>| -> String {
+        lines.iter().map(|line| format!("{line}\n")).collect()
+    };
+    match notes {
+        Changed::ByCommit(notes) => {
+            for (commit, lines) in notes {
+                let text = text(lines);
+                let _ = write!(stream, "N inline {commit}\ndata {}\n{text}\n", text.len());
+            }
+        }
+        Changed::ByPath(notes) => {
+            for (path, lines) in notes {
+                let text = text(lines);
+                let _ = write!(
+                    stream,
+                    "M 100644 inline {path}\ndata {}\n{text}\n",
+                    text.len()
+                );
+            }
+        }
     }
     stream
 }

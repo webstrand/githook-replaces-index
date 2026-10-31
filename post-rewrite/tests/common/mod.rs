@@ -355,3 +355,26 @@ pub fn printed(lines: &[String]) -> String {
     let quoted: Vec<String> = lines.iter().map(|line| format!("'{line}'")).collect();
     format!("printf '%s\\n' {} | ", quoted.join(" "))
 }
+
+/// Makes every update of the notes ref in `repo` fail unless it names the commit it moves the ref
+/// from, as a writer that cannot overwrite a concurrent write does. Creating the ref is let be.
+pub fn refuse_unchecked_writes(repo: &Path) {
+    let hook = repo.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    let zero = "0".repeat(40);
+    let notes = "refs/notes/replaces";
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\n\
+             [ \"$1\" = prepared ] || exit 0\n\
+             while read old new ref; do\n\
+             \x20 if [ \"$ref\" = {notes} ] && [ \"$old\" = {zero} ] && git rev-parse -q --verify {notes} >/dev/null; then\n\
+             \x20   echo \"unchecked write of $ref\" >&2; exit 1\n\
+             \x20 fi\n\
+             done\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+}

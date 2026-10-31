@@ -1,7 +1,7 @@
 //! Pulls a remote's replaces notes: fetches its refs/notes/replaces into
-//! refs/notes/remotes/<remote>/replaces, and merges that into the local ref with the
-//! `cat_sort_uniq` strategy, which takes the union of each note's lines. Lines are only ever added
-//! to the notes, so the union is the whole merge. The remote is not changed; it pulls from this
+//! refs/notes/remotes/<remote>/replaces, and merges that into the local ref as `record` writes it,
+//! taking the union of each note's lines and moving the ref only from the commit it read. Lines are
+//! only ever added to the notes, so the union is the whole merge. The remote is not changed; it pulls from this
 //! clone in turn.
 
 mod error;
@@ -48,26 +48,18 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
         remote: remote.to_owned(),
         source,
     })?;
-    let ours = runner::run(&mut git(["rev-parse", "-q", "--verify", REF])).map_err(|source| {
-        Error::Merge {
-            remote: remote.to_owned(),
-            source,
-        }
+    // The commit fetched, so that a fetch that moves the ref in the meantime does not change what
+    // is merged.
+    let fetched = runner::stdout(&mut git([
+        "rev-parse",
+        "--verify",
+        &format!("{theirs}^{{commit}}"),
+    ]))
+    .map_err(|source| Error::Fetch {
+        remote: remote.to_owned(),
+        source,
     })?;
-    let mut merge = if ours.status.success() {
-        git([
-            "notes",
-            &format!("--ref={REF}"),
-            "merge",
-            "-q",
-            "-s",
-            "cat_sort_uniq",
-            &theirs,
-        ])
-    } else {
-        git(["update-ref", REF, &theirs])
-    };
-    runner::status(&mut merge).map_err(|source| Error::Merge {
+    replaces_index_record::merge(fetched.trim()).map_err(|source| Error::Merge {
         remote: remote.to_owned(),
         source,
     })?;

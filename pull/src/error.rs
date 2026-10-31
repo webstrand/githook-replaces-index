@@ -16,6 +16,6 @@ pub enum Error {
     #[error("could not merge the notes of {remote}: {source}")]
     Merge {
         remote: String,
-        source: runner::Error,
+        source: replaces_index_record::Error,
     },
 }
