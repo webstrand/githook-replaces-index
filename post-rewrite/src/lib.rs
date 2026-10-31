@@ -39,11 +39,7 @@ pub enum Kind {
 
 /// Records the rewrite that `input` reports, one `<old> <new>` line per rewritten commit.
 pub fn post_rewrite(kind: Kind, input: &str) -> Result<(), Failure> {
-    let reported = Rewrite::parse(input);
-    let rewrite = resolve(kind, reported.clone()).map_err(|error| Failure {
-        error,
-        rewrite: reported,
-    })?;
+    let rewrite = resolve(kind, Rewrite::parse(input));
     replaces_index_record::record(&rewrite).map_err(|error| Failure {
         error: Error::Record(error),
         rewrite,
@@ -60,28 +56,68 @@ pub struct Failure {
 
 /// What of `rewrite` is to be recorded now: during a rebase, the amends of commits that the rebase
 /// made are set aside, and the replacements it reports when it ends are followed through them.
-fn resolve(kind: Kind, mut rewrite: Rewrite) -> Result<Rewrite, Error> {
-    match (kind, rebase_state()?) {
-        (Kind::Amend, Some(state)) => {
+///
+/// When the hook cannot keep track of the amends, it says why and records a cruder form, which
+/// names commits that it would otherwise leave out, or which leaves out amends it cannot read:
+/// each replacement it records holds all the same, and a rewrite is not lost to a failure that
+/// recording it would not meet.
+fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
+    if kind == Kind::FilterRepo {
+        return rewrite;
+    }
+    let state = match rebase_state() {
+        Ok(Some(state)) => state,
+        Ok(None) => return rewrite,
+        Err(err) => {
+            warn(err, "the rewrite is recorded as git reported it");
+            return rewrite;
+        }
+    };
+    match kind {
+        Kind::Amend => {
             let mut aside = Vec::new();
             for replacement in mem::take(&mut rewrite.replacements) {
-                if before_rebase(&state, &replacement.0)? {
-                    rewrite.replacements.push(replacement);
-                } else {
-                    aside.push(replacement);
+                match before_rebase(&state, &replacement.0) {
+                    Ok(true) => rewrite.replacements.push(replacement),
+                    Ok(false) => aside.push(replacement),
+                    Err(err) => {
+                        warn(err, "the amend is recorded at once");
+                        rewrite.replacements.push(replacement);
+                    }
                 }
             }
-            set_aside(&state.join(AMENDED), &aside)?;
-        }
-        (Kind::Rebase, Some(state)) => {
-            let amends = Amends::read(&state.join(AMENDED))?;
-            for (_, new) in &mut rewrite.replacements {
-                *new = amends.last(new, on_branch)?.to_owned();
+            if let Err(err) = set_aside(&state.join(AMENDED), &aside) {
+                warn(err, "the amend is recorded at once");
+                rewrite.replacements.extend(aside);
             }
         }
-        _ => {}
+        Kind::Rebase => {
+            let amends = match Amends::read(&state.join(AMENDED)) {
+                Ok(amends) => amends,
+                Err(err) => {
+                    warn(err, "the amends made during the rebase are not recorded");
+                    return rewrite;
+                }
+            };
+            match amends.follow(&rewrite, on_branch) {
+                Ok(followed) => rewrite = followed,
+                Err(err) => {
+                    warn(
+                        err,
+                        "every amend made during the rebase is recorded as it was made",
+                    );
+                    rewrite.replacements.extend(amends.made);
+                }
+            }
+        }
+        Kind::FilterRepo => {}
     }
-    Ok(rewrite)
+    rewrite
+}
+
+/// Says why the rewrite is recorded in a cruder form than the hook would record.
+fn warn(err: Error, consequence: &str) {
+    let _ = writeln!(io::stderr(), "replaces-index: {err}; {consequence}");
 }
 
 /// The file of the rebase's state directory in which the hook sets amends aside.
@@ -157,6 +193,8 @@ fn set_aside(path: &Path, amends: &[(String, String)]) -> Result<(), Error> {
 #[derive(Default)]
 struct Amends {
     last: HashMap<String, String>,
+    /// Every amend, in the order it was made.
+    made: Vec<(String, String)>,
 }
 
 impl Amends {
@@ -179,8 +217,22 @@ impl Amends {
             };
             // A commit amended twice is replaced by the later amend.
             amends.last.insert(old.to_owned(), new.to_owned());
+            amends.made.push((old.to_owned(), new.to_owned()));
         }
         Ok(amends)
+    }
+
+    /// `rewrite` with each new commit followed to the commit that finally took its place.
+    fn follow(
+        &self,
+        rewrite: &Rewrite,
+        mut kept: impl FnMut(&str) -> Result<bool, Error>,
+    ) -> Result<Rewrite, Error> {
+        let mut followed = rewrite.clone();
+        for (_, new) in &mut followed.replacements {
+            *new = self.last(new, &mut kept)?.to_owned();
+        }
+        Ok(followed)
     }
 
     /// The commit that finally took the place of `commit`, following the amends whose commit

@@ -50,6 +50,18 @@ During a rebase, git reports each fixup or squash step, and each amend that an `
 
 `git am` keeps its state in `rebase-apply/` as a rebase may, but marks it with an `applying` file rather than `rebasing`, and runs no `post-rewrite` when it ends. An amend while `git am` is stopped is therefore recorded at once, rather than set aside.
 
+When the hook cannot keep track of the amends of a rebase, it says why and records a cruder form instead, in which each replacement holds all the same:
+
+| Failure | What the hook records |
+| - | - |
+| The state directory cannot be found, or whether the amended commit was there before the rebase cannot be told | the amend, at once |
+| The amend cannot be set aside | the amend, at once |
+| The state directory cannot be found when the rebase ends | the replacements as git reported them; the amends set aside are not recorded |
+| The amends set aside cannot be read when the rebase ends | the replacements as git reported them; the amends set aside are not recorded |
+| Whether a commit is on the branch cannot be told when the rebase ends | the replacements as git reported them, and every amend set aside, as it was made |
+
+A cruder form names commits that the rebase discarded, or leaves out the commit that took the place of one it reported. `record-filter-repo` passes on no rebase, and the hook looks for none when it runs.
+
 The lines a note inherits are a copy, for reading one note alone. A clone may rewrite a commit before the note of that commit arrives from another clone, and the new note then inherits nothing from it. The queries do not rely on the copy: they follow the `replaces:` lines from note to note.
 
 ## Abandoned rewrites
@@ -62,7 +74,7 @@ replaces-index: the rewrite was kept in <path>; to record it by hand:
 printf '%s\n' '<old> <new>' … | "$(git rev-parse --git-common-dir)"/bin/replaces-index-record
 ```
 
-The hook then exits with a failure status, which git ignores: the rewrite itself is complete. During a rebase, the record holds the replacements after they were followed through the amends set aside, or as git reported them when following them failed.
+The hook then exits with a failure status, which git ignores: the rewrite itself is complete. At the end of a rebase, the record holds the replacements as the hook would have recorded them, after they were followed through the amends set aside.
 
 Each record is a file of `<old> <new>` lines in `replaces-abandoned/` in the common git directory, which the worktrees share. It is named after the time it was written and a random suffix, so that the records sort in the order they were written. The hook writes it under a temporary name that begins with `.`, and renames it, so that a record either holds the whole rewrite or does not exist. When no record can be written, for instance because the disk is full, the hook says so and prints the command all the same. A standard error that cannot be written to, for instance once the terminal is gone, does not keep the record from being written.
 

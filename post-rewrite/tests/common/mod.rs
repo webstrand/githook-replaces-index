@@ -171,7 +171,7 @@ pub fn fake_git(dir: &Path, fail: &str) -> PathBuf {
     let script = format!(
         "#!/bin/sh\n\
          for arg; do\n\
-         \x20 if [ \"$arg\" = '{fail}' ]; then echo \"fake git fails on $arg\" >&2; exit 1; fi\n\
+         \x20 if [ \"$arg\" = '{fail}' ]; then echo \"fake git fails on $arg\" >&2; exit 128; fi\n\
          done\n\
          exec '{}' \"$@\"\n",
         real.display()
