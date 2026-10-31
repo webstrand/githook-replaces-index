@@ -274,17 +274,10 @@ impl Amends {
                 });
             }
         };
-        let mut amends = Self::default();
-        for line in text.lines() {
-            let mut words = line.split_whitespace();
-            let (Some(old), Some(new)) = (words.next(), words.next()) else {
-                continue;
-            };
-            // A commit amended twice is replaced by the later amend.
-            amends.last.insert(old.to_owned(), new.to_owned());
-            amends.made.push((old.to_owned(), new.to_owned()));
-        }
-        Ok(amends)
+        let made = Rewrite::parse(&text).replacements;
+        // A commit amended twice is replaced by the later amend.
+        let last = made.iter().cloned().collect();
+        Ok(Self { last, made })
     }
 
     /// `rewrite` with each new commit followed to the commit that finally took its place.
@@ -309,6 +302,8 @@ impl Amends {
     ) -> Result<&'a str, Error> {
         let mut visited = HashSet::new();
         while let Some(next) = self.last.get(commit) {
+            // An amend that made the commit again is checked first, which spares asking git
+            // whether it is kept; the visited commits end any longer cycle.
             if next == commit || !visited.insert(commit) || !kept(next)? {
                 break;
             }
