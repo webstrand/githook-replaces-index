@@ -14,9 +14,9 @@
 //! follows the `replaces:` lines from note to note. The lines that git copies to `new` when
 //! notes.rewriteRef matches this ref are among those `new` inherits, and are kept.
 //!
-//! The notes of the commits a rewrite created are written in one commit on the ref. The commit is
-//! written to a ref of its own, and the notes ref is moved to it only if it has not moved since it
-//! was read; otherwise the notes are read again.
+//! The notes of the commits a rewrite created are written in one commit on the ref, through
+//! `git fast-import`, which moves the notes ref to it only if it has not moved since it was read;
+//! otherwise the notes are read again.
 
 pub mod abandoned;
 mod error;
@@ -116,12 +116,11 @@ enum Change<'a> {
 /// ref holds it.
 fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
     *progress_mut() = Progress::default();
-    let staging = Staging::new();
     let mut ceiling = FIRST_WAIT;
     let mut refusals = 0;
     loop {
         progress_mut().attempt += 1;
-        let retry = match attempt(change, &staging.0)? {
+        let retry = match attempt(change)? {
             Attempt::Written => {
                 written();
                 return Ok(());
@@ -193,43 +192,8 @@ enum Attempt {
     Moved,
     /// Another process held the lock of the ref.
     Locked,
-    /// git refused to write the ref, or the staging ref, and no lock was seen.
+    /// git refused to move the ref, which did not move, and no lock was seen.
     Refused(runner::Error),
-}
-
-/// The ref that a writer writes its commit to before it moves the notes ref, removed when the
-/// writer is done.
-struct Staging(String);
-
-/// The staging ref of the writer of this process, if one is writing.
-static STAGING: Mutex<Option<String>> = Mutex::new(None);
-
-impl Staging {
-    fn new() -> Self {
-        let name = format!("refs/replaces-index/record-{:016x}", random());
-        *STAGING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(name.clone());
-        Self(name)
-    }
-}
-
-impl Drop for Staging {
-    fn drop(&mut self) {
-        let _ = runner::run(&mut git(["update-ref", "-d", &self.0]));
-        *STAGING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    }
-}
-
-/// The ref that this process stages the notes in while it writes them, which a process that
-/// ends before the writer is done must remove itself.
-pub fn staging() -> Option<String> {
-    STAGING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
 }
 
 /// A random number, which no other process draws alike.
@@ -238,7 +202,7 @@ fn random() -> u64 {
 }
 
 /// Writes the notes once.
-fn attempt(change: Change, staging: &str) -> Result<Attempt, Error> {
+fn attempt(change: Change) -> Result<Attempt, Error> {
     let parent = notes_commit()?;
     let (changed, theirs) = match change {
         Change::Rewrite(rewrite) => {
@@ -265,33 +229,13 @@ fn attempt(change: Change, staging: &str) -> Result<Attempt, Error> {
     }
 
     let ident = runner::stdout(&mut git(["var", "GIT_COMMITTER_IDENT"])).map_err(Error::Write)?;
-    let stream = stream(
-        staging,
-        ident.trim_end(),
-        parent.as_deref(),
-        theirs,
-        &changed,
-    );
-    // fast-import writes the staging ref, which a reftable repository locks along with every
-    // other ref.
-    if let Err(err) = runner::stdout_with_input(
-        &mut git(["fast-import", "--quiet", "--force"]),
-        stream.as_bytes(),
-    ) {
-        return if refs_locked()? {
-            Ok(Attempt::Locked)
-        } else {
-            Ok(Attempt::Refused(err))
-        };
+    let stream = stream(ident.trim_end(), parent.as_deref(), theirs, &changed);
+    // Without --force, fast-import moves the ref only to a commit that holds the one it points at
+    // when fast-import moves it, which a writer that came in between has moved it from.
+    match runner::stdout_with_input(&mut git(["fast-import", "--quiet"]), stream.as_bytes()) {
+        Ok(_) => Ok(Attempt::Written),
+        Err(err) => refused(parent.as_deref(), err),
     }
-    let commit = runner::stdout(&mut git([
-        "rev-parse",
-        "-q",
-        "--verify",
-        &format!("{staging}^{{commit}}"),
-    ]))
-    .map_err(Error::Write)?;
-    move_ref(commit.trim_end(), parent.as_deref())
 }
 
 /// Moves the ref to `new`, only if it still points at `parent`, or does not exist when `parent` is
@@ -307,19 +251,23 @@ fn move_ref(new: &str, parent: Option<&str>) -> Result<Attempt, Error> {
         parent.unwrap_or(""),
     ]);
     let output = runner::run(&mut update).map_err(Error::Write)?;
-    if output.status.success() {
-        return Ok(Attempt::Written);
+    match runner::check(&update, &output) {
+        Ok(()) => Ok(Attempt::Written),
+        Err(err) => refused(parent, err),
     }
-    // git refuses alike a ref that moved, one whose lock another process holds, and one it cannot
-    // write at all; only reading the ref again, and looking for its lock, tells them apart.
+}
+
+/// Why git refused, with `err`, to move the ref from `parent`. git refuses alike a ref that moved,
+/// one whose lock another process holds, and one it cannot write at all; only reading the ref
+/// again, and looking for its lock, tells them apart.
+fn refused(parent: Option<&str>, err: runner::Error) -> Result<Attempt, Error> {
     if notes_commit()?.as_deref() != parent {
         return Ok(Attempt::Moved);
     }
     if refs_locked()? {
         return Ok(Attempt::Locked);
     }
-    let refused = runner::check(&update, &output).expect_err("update-ref failed");
-    Ok(Attempt::Refused(refused))
+    Ok(Attempt::Refused(err))
 }
 
 /// Whether commit `ancestor` is `descendant` or one of its ancestors.
@@ -502,24 +450,18 @@ fn notes_of(current: &Notes, rewrite: &Rewrite) -> Notes {
         .collect()
 }
 
-/// A fast-import stream for one commit on `staging` that sets `notes` on top of `parent`, and that
+/// A fast-import stream for one commit on the ref that sets `notes` on top of `parent`, and that
 /// merges `theirs`, if given. Notes by commit are written with `N`, which leaves the fanout of the
 /// notes tree to fast-import; every commit they annotate is one that a rewrite in this clone
 /// created, which the clone therefore has. Notes by path are written as files at that path.
-fn stream(
-    staging: &str,
-    ident: &str,
-    parent: Option<&str>,
-    theirs: Option<&str>,
-    notes: &Changed,
-) -> String {
+fn stream(ident: &str, parent: Option<&str>, theirs: Option<&str>, notes: &Changed) -> String {
     let message = if theirs.is_some() {
         "replaces-index: merge\n"
     } else {
         "replaces-index: record\n"
     };
     let mut stream = format!(
-        "commit {staging}\ncommitter {ident}\ndata {}\n{message}",
+        "commit {REF}\ncommitter {ident}\ndata {}\n{message}",
         message.len()
     );
     if let Some(parent) = parent {

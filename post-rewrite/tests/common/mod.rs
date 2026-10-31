@@ -206,13 +206,13 @@ fn write_fake_git(dir: &Path, body: &str) -> PathBuf {
 }
 
 /// A directory, under `dir`, that holds a `git` that moves the notes ref itself just before each
-/// time it is asked to move it, so that every attempt to move it loses the race. The ref must
-/// exist.
+/// `git fast-import`, which writes the notes, so that every attempt to write them loses the race.
+/// The ref must exist.
 pub fn fake_git_racing(dir: &Path) -> PathBuf {
     let real = real_git();
     let real = real.display();
     let body = format!(
-        "if [ \"$1\" = update-ref ] && [ \"$4\" = refs/notes/replaces ]; then\n\
+        "if [ \"$1\" = fast-import ]; then\n\
          \x20 old=$('{real}' rev-parse refs/notes/replaces)\n\
          \x20 new=$('{real}' commit-tree \"$old^{{tree}}\" -p \"$old\" -m moved)\n\
          \x20 '{real}' update-ref refs/notes/replaces \"$new\" \"$old\"\n\

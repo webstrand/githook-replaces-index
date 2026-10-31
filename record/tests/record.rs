@@ -112,7 +112,7 @@ fn leaves_the_ref_alone_when_nothing_changes() {
     let before = git(repo, &["rev-parse", REF]);
     record(repo, &format!("{a} {b}\n"));
     assert_eq!(git(repo, &["rev-parse", REF]), before);
-    // The staging ref is removed.
+    // Nothing is left beside the notes ref.
     assert_eq!(
         git(repo, &["for-each-ref", "refs/replaces-index/"]).as_deref(),
         Some("")
