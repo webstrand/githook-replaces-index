@@ -37,8 +37,13 @@ pub const REF: &str = "refs/notes/replaces";
 /// The prefix of each line of a note.
 pub const REPLACES: &str = "replaces: ";
 
-/// The attempts to write the ref before a writer gives up.
-const ATTEMPTS: u32 = 20;
+/// The longest wait before the first retry; each retry may wait twice as long as the one before,
+/// up to `LONGEST_WAIT`.
+const FIRST_WAIT: Duration = Duration::from_millis(50);
+const LONGEST_WAIT: Duration = Duration::from_secs(1);
+
+/// The refusals in a row, with no lock seen, after which a writer gives up.
+const REFUSALS: u32 = 3;
 
 /// The replacements of a rewrite, each from the commit it was made from to the commit it made, in
 /// the order the rewrite reported them.
@@ -78,27 +83,83 @@ pub fn record(rewrite: &Rewrite) -> Result<(), Error> {
 }
 
 /// Records `rewrite` as `record` does, and calls `written` as soon as the ref holds it.
+///
+/// A writer retries for as long as other writers move the ref or hold its lock; `progress` tells
+/// how it fares, and a process that must end sooner ends it.
 pub fn record_then(rewrite: &Rewrite, written: impl FnOnce()) -> Result<(), Error> {
+    *progress_mut() = Progress::default();
     if rewrite.replacements.is_empty() {
         written();
         return Ok(());
     }
     let staging = Staging::new();
-    let mut refused = None;
-    for n in 1..=ATTEMPTS {
-        match attempt(rewrite, &staging.0)? {
+    let mut ceiling = FIRST_WAIT;
+    let mut refusals = 0;
+    loop {
+        progress_mut().attempt += 1;
+        let retry = match attempt(rewrite, &staging.0)? {
             Attempt::Written => {
                 written();
                 return Ok(());
             }
-            Attempt::Moved => refused = None,
-            Attempt::Refused(err) => refused = Some(err),
-        }
+            Attempt::Moved => {
+                refusals = 0;
+                Retry::Moved
+            }
+            Attempt::Locked => {
+                refusals = 0;
+                Retry::Locked
+            }
+            // A lock may be let go of between the refusal and the look for it, so that only a
+            // refusal that recurs is taken for one that will not end.
+            Attempt::Refused(err) => {
+                refusals += 1;
+                if refusals == REFUSALS {
+                    return Err(Error::Write(err));
+                }
+                Retry::Locked
+            }
+        };
+        progress_mut().retrying = Some(retry);
         // Writers that lost to each other wait for different times before retrying.
-        let tenths = (std::process::id() * 7 + n * 13) % 9 + 1;
-        std::thread::sleep(Duration::from_millis(u64::from(tenths) * 100));
+        let ceiling_ms = u64::try_from(ceiling.as_millis()).unwrap_or(u64::MAX);
+        std::thread::sleep(Duration::from_millis(random() % (ceiling_ms + 1)));
+        ceiling = (ceiling * 2).min(LONGEST_WAIT);
     }
-    Err(refused.map_or(Error::KeptMoving, Error::Write))
+}
+
+/// How the writer of this process fares.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// The attempts made so far, the one under way included.
+    pub attempt: u32,
+    /// Why the writer retries, once an attempt has failed.
+    pub retrying: Option<Retry>,
+}
+
+/// Why a writer retries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retry {
+    /// Another writer moved the ref after it was read.
+    Moved,
+    /// Another process held the lock of the ref.
+    Locked,
+}
+
+static PROGRESS: Mutex<Progress> = Mutex::new(Progress {
+    attempt: 0,
+    retrying: None,
+});
+
+fn progress_mut() -> std::sync::MutexGuard<'static, Progress> {
+    PROGRESS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// How the writer of this process fares.
+pub fn progress() -> Progress {
+    *progress_mut()
 }
 
 /// The outcome of one attempt to write the ref.
@@ -106,8 +167,9 @@ enum Attempt {
     Written,
     /// Another writer moved the ref after it was read.
     Moved,
-    /// The ref was not moved, but git refused to move it, for instance while another process
-    /// held its lock.
+    /// Another process held the lock of the ref.
+    Locked,
+    /// git refused to move the ref, which did not move, and no lock of it was seen.
     Refused(runner::Error),
 }
 
@@ -195,9 +257,15 @@ fn attempt(rewrite: &Rewrite, staging: &str) -> Result<Attempt, Error> {
     if output.status.success() {
         return Ok(Attempt::Written);
     }
-    // git refuses alike a ref that moved and one it could not lock; only reading it again tells.
+    // git refuses alike a ref that moved, one whose lock another process holds, and one it cannot
+    // write at all; only reading the ref again, and looking for its lock, tells them apart.
     if notes_commit()? != parent {
         return Ok(Attempt::Moved);
+    }
+    let lock =
+        runner::rev_parse_path(&["--git-path", &format!("{REF}.lock")]).map_err(Error::Write)?;
+    if lock.exists() {
+        return Ok(Attempt::Locked);
     }
     let refused = runner::check(&update, &output).expect_err("update-ref failed");
     Ok(Attempt::Refused(refused))

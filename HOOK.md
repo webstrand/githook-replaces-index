@@ -38,7 +38,15 @@ Git runs `post-rewrite` after `git commit --amend` and after a rebase, with one 
 
 `record` reads the notes of the commits involved, and gives each new commit a `replaces:` line for the commit it was made from and every `replaces:` line of that commit's note, beside the lines it holds already. It writes the notes that changed in a single commit on the ref, through `git fast-import`, and leaves every other note as it was. Since every commit it annotates is one that a rewrite in this clone made, the clone has it, and fast-import keeps the fanout of the notes tree.
 
-`record` writes the commit to a ref of its own, `refs/replaces-index/record-<random>`, and moves `refs/notes/replaces` to it only if the notes ref still points at the commit it read, then removes its own ref. When git refuses to move the notes ref, `record` reads it again. If another writer, such as a rebase in another worktree, moved it in the meantime, `record` reads the notes again and retries; if it did not move, another process holds its lock, and `record` retries as well. It waits a short and varying time between attempts, and gives up after 20 attempts with an error. No write therefore replaces another.
+`record` writes the commit to a ref of its own, `refs/replaces-index/record-<random>`, and moves `refs/notes/replaces` to it only if the notes ref still points at the commit it read, then removes its own ref. When git refuses to move the notes ref, `record` reads it again. If another writer, such as a rebase in another worktree, moved it in the meantime, `record` reads the notes again and retries. If it did not move and its lock file exists, another process holds the lock, and `record` retries as well. A refusal with no lock in sight is taken for one that will not end once it recurs three times in a row, and `record` then fails. Before each retry, `record` waits a random time up to a ceiling that starts at 50 milliseconds and doubles with each retry up to a second, so that writers that collided spread out. It retries for as long as the ref keeps moving or stays locked: no write therefore replaces another, and a process that must end sooner is ended by a signal. No git command it runs is given a time limit either, since a repository on a network filesystem may answer slowly.
+
+Once the hook has run for a second, it prints what it waits for every second, until it ends:
+
+```
+replaces-index: waiting for git fast-import --quiet --force (3s; signal to abandon)
+replaces-index: refs/notes/replaces is locked, retrying (attempt 14, 5s; signal to abandon)
+replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; signal to abandon)
+```
 
 - An amend records that the new commit was made from the amended one.
 - A rebase records the same for each commit it creates.
@@ -66,7 +74,7 @@ The lines a note inherits are a copy, for reading one note alone. A clone may re
 
 ## Abandoned rewrites
 
-Git passes a rewrite to `post-rewrite` once only. When the hook cannot record it, for instance because the notes ref stayed locked or is not a commit, or because `git fast-import` failed, it keeps the replacements that remained to be recorded as an abandoned record, and prints the error and a command that records them by hand:
+Git passes a rewrite to `post-rewrite` once only. When the hook cannot record it, for instance because the notes ref is not a commit, git refuses to move it for another reason than a lock, or `git fast-import` failed, it keeps the replacements that remained to be recorded as an abandoned record, and prints the error and a command that records them by hand:
 
 ```
 replaces-index: <error>

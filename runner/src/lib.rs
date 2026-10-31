@@ -43,12 +43,13 @@ where
 /// The programs running, so that a process that is stopping can end them.
 static CHILDREN: Mutex<Children> = Mutex::new(Children {
     stopping: false,
-    ids: Vec::new(),
+    running: Vec::new(),
 });
 
 struct Children {
     stopping: bool,
-    ids: Vec<u32>,
+    /// The id of each program running, and the command that runs it.
+    running: Vec<(u32, String)>,
 }
 
 fn children() -> std::sync::MutexGuard<'static, Children> {
@@ -62,7 +63,7 @@ fn children() -> std::sync::MutexGuard<'static, Children> {
 pub fn stop() {
     let mut children = children();
     children.stopping = true;
-    for &id in &children.ids {
+    for &(id, _) in &children.running {
         // SAFETY: kill only sends a signal. The id is that of a child of this process; between
         // the wait that reaps it and its removal from the list, it could only name another
         // process once the system has handed out every other id.
@@ -82,15 +83,24 @@ fn spawn(command: &mut Command) -> io::Result<Child> {
         }
     }
     let child = command.spawn()?;
-    children.ids.push(child.id());
+    children.running.push((child.id(), describe(command)));
     Ok(child)
+}
+
+/// The commands running, oldest first.
+pub fn running() -> Vec<String> {
+    children()
+        .running
+        .iter()
+        .map(|(_, command)| command.clone())
+        .collect()
 }
 
 /// Waits for `child` to end, with its output captured.
 fn wait(child: Child) -> io::Result<Output> {
     let id = child.id();
     let output = child.wait_with_output();
-    children().ids.retain(|&other| other != id);
+    children().running.retain(|&(other, _)| other != id);
     output
 }
 

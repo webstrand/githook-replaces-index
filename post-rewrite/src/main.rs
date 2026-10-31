@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use replaces_index_post_rewrite::{Error, Failure, Kind, post_rewrite};
-use replaces_index_record::{Rewrite, abandoned};
+use replaces_index_record::{REF, Retry, Rewrite, abandoned};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 use signal_hook::iterator::Signals;
 
@@ -36,6 +36,9 @@ const SIGNALS: [i32; 4] = [SIGINT, SIGTERM, SIGHUP, SIGQUIT];
 
 /// How long the hook waits for an abandoned record to be written once a signal ends it.
 const PATIENCE: Duration = Duration::from_secs(60);
+
+/// How often the hook says what it waits for, once it has taken that long.
+const HEARTBEAT: Duration = Duration::from_secs(1);
 
 enum Event {
     Signal(i32),
@@ -86,8 +89,22 @@ fn main() -> ExitCode {
             abandoned::keep(&dir, rewrite).map_err(|err| err.to_string())
         }),
     };
+    let start = Instant::now();
+    let mut beat = start + HEARTBEAT;
     loop {
-        match hook.received.recv().expect("the hook holds a sender") {
+        let event = match hook
+            .received
+            .recv_timeout(beat.saturating_duration_since(Instant::now()))
+        {
+            Ok(event) => event,
+            Err(RecvTimeoutError::Timeout) => {
+                say(heartbeat(start.elapsed()));
+                beat += HEARTBEAT;
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => unreachable!("the hook holds a sender"),
+        };
+        match event {
             Event::Done(Ok(())) => return ExitCode::SUCCESS,
             Event::Done(Err(Failure { error, rewrite })) => {
                 say(error);
@@ -201,6 +218,30 @@ impl Hook {
                 }
             }
         }
+    }
+}
+
+/// What the hook waits for, `elapsed` after it started.
+fn heartbeat(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    let progress = replaces_index_record::progress();
+    let running = runner::running();
+    let waiting = match running.first() {
+        Some(command) => format!("waiting for {command}"),
+        None => "recording".to_owned(),
+    };
+    match progress.retrying {
+        Some(retry) => {
+            let why = match retry {
+                Retry::Moved => "keeps moving",
+                Retry::Locked => "is locked",
+            };
+            format!(
+                "{REF} {why}, retrying (attempt {}, {seconds}s; signal to abandon)",
+                progress.attempt
+            )
+        }
+        None => format!("{waiting} ({seconds}s; signal to abandon)"),
     }
 }
 

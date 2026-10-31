@@ -11,8 +11,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{
-    abandoned, amend_of, amended, commit, failing, fake_git, git, hook, note, notes_lock, ok,
-    printed, rebase, rebase_keeping, repo, stderr_of, with_git_env,
+    abandoned, amend_of, amended, commit, failing, fake_git, fake_git_holding, fake_git_racing,
+    git, hook, interrupt_when, note, notes_lock, ok, printed, rebase, rebase_keeping, release,
+    repo, stderr_of, with_git_env,
 };
 
 /// Asserts that the hook failed, kept `lines` as the only abandoned record, and printed them.
@@ -34,11 +35,16 @@ fn a_held_lock_abandons_an_amend() {
     let repo = repo();
     let a = commit(repo.path(), "a");
     fs::write(notes_lock(repo.path()), "").unwrap();
-    let stderr = stderr_of(git(
-        repo.path(),
-        &["commit", "-q", "--amend", "-m", "a, amended"],
-    ));
+    // The hook retries for as long as the lock is held, until the operator interrupts it.
+    let stderr = interrupt_when(
+        git(
+            repo.path(),
+            &["commit", "-q", "--amend", "-m", "a, amended"],
+        ),
+        "signal to abandon",
+    );
     let a2 = ok(repo.path(), &["rev-parse", "HEAD"]);
+    assert!(stderr.contains("is locked, retrying"), "{stderr}");
     assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
 }
 
@@ -55,7 +61,7 @@ fn a_held_lock_abandons_the_end_of_a_rebase() {
     let mut command = git(repo.path(), &["rebase", "-q", "-i", "upstream"]);
     let script = "1s/$/\\nexec git commit -q --amend -m amended/";
     command.env("GIT_SEQUENCE_EDITOR", format!("sed -i -e '{script}'"));
-    let stderr = stderr_of(command);
+    let stderr = interrupt_when(command, "signal to abandon");
     let a2 = ok(repo.path(), &["rev-parse", "HEAD~"]);
     let b2 = ok(repo.path(), &["rev-parse", "HEAD"]);
     // The record holds the amended commit, not the one the rebase made before the amend.
@@ -321,4 +327,85 @@ fn a_rebase_that_is_recorded_keeps_no_record() {
     commit(repo.path(), "a");
     rebase(repo.path(), "HEAD~", "");
     assert!(abandoned(repo.path()).is_empty());
+}
+
+#[test]
+fn a_signal_while_the_ref_keeps_moving_abandons_the_rewrite() {
+    let (repo, a, a2) = amended();
+    let base = ok(repo.path(), &["rev-parse", "HEAD~"]);
+    ok(
+        repo.path(),
+        &["notes", "--ref=replaces", "add", "-m", "other", &base],
+    );
+    let bin = fake_git_racing(repo.path());
+    let stderr = interrupt_when(
+        hook(repo.path(), "amend", format!("{a} {a2}\n"), Some(&bin)),
+        "signal to abandon",
+    );
+    assert!(stderr.contains("keeps moving, retrying"), "{stderr}");
+    assert!(stderr.contains("waiting for disk"), "{stderr}");
+    assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
+}
+
+#[test]
+fn a_lock_held_for_a_while_is_reported_and_waited_for() {
+    let (repo, a, a2) = amended();
+    let lock = notes_lock(repo.path());
+    fs::write(&lock, "").unwrap();
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(2500));
+        fs::remove_file(lock).unwrap();
+    });
+    let output = hook(repo.path(), "amend", format!("{a} {a2}\n"), None)
+        .output()
+        .unwrap();
+    release.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("is locked, retrying (attempt "), "{stderr}");
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+    assert!(abandoned(repo.path()).is_empty());
+}
+
+#[test]
+fn a_slow_git_is_reported() {
+    let (repo, a, a2) = amended();
+    let bin = fake_git_holding(repo.path(), "fast-import");
+    let path = repo.path().to_owned();
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(2500));
+        release(&path);
+    });
+    let output = hook(repo.path(), "amend", format!("{a} {a2}\n"), Some(&bin))
+        .output()
+        .unwrap();
+    release.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("waiting for git fast-import"), "{stderr}");
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+}
+
+#[test]
+fn a_quick_record_says_nothing() {
+    let (repo, a, a2) = amended();
+    let output = hook(repo.path(), "amend", format!("{a} {a2}\n"), None)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_ref_that_git_will_not_move_abandons_the_rewrite() {
+    let (repo, a, a2) = amended();
+    let bin = fake_git(repo.path(), "update-ref");
+    let (stderr, _) = failing(hook(
+        repo.path(),
+        "amend",
+        format!("{a} {a2}\n"),
+        Some(&bin),
+    ));
+    assert!(stderr.contains("fake git fails on update-ref"), "{stderr}");
+    assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
 }

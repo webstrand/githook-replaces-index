@@ -182,20 +182,83 @@ pub fn fake_git_holding(dir: &Path, hold: &str) -> PathBuf {
 }
 
 fn fake_git_script(dir: &Path, arg: &str, on_match: &str) -> PathBuf {
-    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+    let body = format!("for arg; do\n  if [ \"$arg\" = '{arg}' ]; then {on_match}; fi\ndone\n");
+    write_fake_git(dir, &body)
+}
+
+/// The git that a fake one runs.
+fn real_git() -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|path| path.join("git"))
         .find(|git| git.is_file())
-        .unwrap();
+        .unwrap()
+}
+
+/// Writes a `git` that runs `body`, then git, in `fake-bin` under `dir`, and returns that.
+fn write_fake_git(dir: &Path, body: &str) -> PathBuf {
     let bin = dir.join("fake-bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let script = format!(
-        "#!/bin/sh\nfor arg; do\n  if [ \"$arg\" = '{arg}' ]; then {on_match}; fi\ndone\nexec '{}' \"$@\"\n",
-        real.display()
-    );
+    let script = format!("#!/bin/sh\n{body}exec '{}' \"$@\"\n", real_git().display());
     let git = bin.join("git");
     std::fs::write(&git, script).unwrap();
     std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
     bin
+}
+
+/// A directory, under `dir`, that holds a `git` that moves the notes ref itself just before each
+/// time it is asked to move it, so that every attempt to move it loses the race. The ref must
+/// exist.
+pub fn fake_git_racing(dir: &Path) -> PathBuf {
+    let real = real_git();
+    let real = real.display();
+    let body = format!(
+        "if [ \"$1\" = update-ref ] && [ \"$4\" = refs/notes/replaces ]; then\n\
+         \x20 old=$('{real}' rev-parse refs/notes/replaces)\n\
+         \x20 new=$('{real}' commit-tree \"$old^{{tree}}\" -p \"$old\" -m moved)\n\
+         \x20 '{real}' update-ref refs/notes/replaces \"$new\" \"$old\"\n\
+         fi\n"
+    );
+    write_fake_git(dir, &body)
+}
+
+/// Runs `command` in a process group of its own and, once its standard error contains `waiting`,
+/// interrupts the group as Ctrl-C does. Returns the standard error of the command and of every
+/// process that shared it, once they have all closed it.
+pub fn interrupt_when(mut command: Command, waiting: &str) -> String {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    let mut child = command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut pipe = child.stderr.take().unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let reader = {
+        let seen = std::sync::Arc::clone(&seen);
+        std::thread::spawn(move || {
+            let mut buffer = [0; 4096];
+            while let Ok(n @ 1..) = pipe.read(&mut buffer) {
+                seen.lock()
+                    .unwrap()
+                    .push_str(&String::from_utf8_lossy(&buffer[..n]));
+            }
+        })
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !seen.lock().unwrap().contains(waiting) {
+        let stderr = seen.lock().unwrap().clone();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never waiting: {stderr}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    kill("INT", &format!("-{}", child.id()));
+    child.wait().unwrap();
+    reader.join().unwrap();
+    seen.lock().unwrap().clone()
 }
 
 /// Waits until the git that `fake_git_holding` made holds, and returns its process id.
