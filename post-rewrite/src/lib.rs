@@ -181,9 +181,18 @@ const AMENDED: &str = "replaces-index-amended";
 
 /// The state directory of the rebase in progress, if any.
 fn rebase_state() -> Result<Option<PathBuf>, Error> {
-    let state = |dir| runner::rev_parse_path(&["--git-path", dir]).map_err(Error::RebaseState);
-    let merge = state("rebase-merge")?;
-    let apply = state("rebase-apply")?;
+    let mut command = runner::git([
+        "rev-parse",
+        "--git-path",
+        "rebase-merge",
+        "--git-path",
+        "rebase-apply",
+    ]);
+    let out = runner::stdout(&mut command).map_err(Error::RebaseState)?;
+    let mut paths = out.lines().map(PathBuf::from);
+    let (Some(merge), Some(apply)) = (paths.next(), paths.next()) else {
+        return Ok(None);
+    };
     let state = if apply.join("rebasing").is_file() {
         Some(apply)
     } else if merge.is_dir() {
