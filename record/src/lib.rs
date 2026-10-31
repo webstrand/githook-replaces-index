@@ -21,6 +21,9 @@
 pub mod abandoned;
 mod error;
 pub mod heartbeat;
+mod repair;
+
+pub use crate::repair::{Repaired, repair, repair_and_say};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
@@ -110,6 +113,8 @@ enum Change<'a> {
     Rewrite(&'a Rewrite),
     /// The notes of another notes commit.
     Merge(&'a str),
+    /// The lines of the notes of an earlier notes commit, which a writer dropped.
+    Restore(&'a str),
 }
 
 /// Writes `change`, retrying while other writers move the ref, and calls `written` as soon as the
@@ -222,6 +227,10 @@ fn attempt(change: Change) -> Result<Attempt, Error> {
             Some(ours) if is_ancestor(theirs, ours)? => return Ok(Attempt::Written),
             Some(ours) if is_ancestor(ours, theirs)? => return move_ref(theirs, Some(ours)),
             Some(ours) => (Changed::ByPath(union(ours, theirs)?), Some(theirs)),
+        },
+        Change::Restore(earlier) => match parent.as_deref() {
+            Some(ours) => (Changed::ByPath(union(ours, earlier)?), None),
+            None => return move_ref(earlier, None),
         },
     };
     if changed.is_empty() {

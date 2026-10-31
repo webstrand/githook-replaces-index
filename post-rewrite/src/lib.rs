@@ -72,6 +72,7 @@ pub fn post_rewrite(
             "{err}; they are recorded again by the next rewrite"
         ));
     }
+    replaces_index_record::repair_and_say("replaces-index");
     Ok(())
 }
 

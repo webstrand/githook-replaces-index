@@ -13,6 +13,11 @@ pub enum Error {
     Write(#[source] runner::Error),
     #[error("{REF} points to {0}, which is not a commit")]
     NotACommit(String),
+    #[error("could not read or write {path}: {source}")]
+    Checked {
+        path: std::path::PathBuf,
+        source: io::Error,
+    },
     #[error("could not read or remove the abandoned records in {path}: {source}")]
     Abandoned {
         path: std::path::PathBuf,

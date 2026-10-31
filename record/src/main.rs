@@ -45,5 +45,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
         .replacements
         .extend(Rewrite::parse(&input).replacements);
     heartbeat::while_running("replaces-index", "Ctrl-C to give up", || record(&rewrite))?;
-    waiting.remove()
+    waiting.remove()?;
+    replaces_index_record::repair_and_say("replaces-index");
+    Ok(())
 }

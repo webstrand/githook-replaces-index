@@ -93,6 +93,18 @@ A signal that ends the hook, `SIGINT`, `SIGTERM`, `SIGHUP` or `SIGQUIT`, before 
 
 Each run of the hook, `record-filter-repo` included, records the abandoned records before its own rewrite, oldest first, so that a later replacement inherits what an earlier one records, and removes them once the notes ref holds them, or held them already. `replaces-index-record` does the same before the rewrite on its standard input, so that the printed command removes the record it came from, and `replaces-index-record --abandoned` records the abandoned records alone. A line that is not a replacement, and a replacement whose new commit the clone lacks, for instance once garbage collection removed it, could never be recorded: they are left out with a warning, and removed with their record. A file whose name begins with `.` is one being written, and is left alone. When the rewrite cannot be recorded, the records stay as they are, and the rewrite is kept in a record of its own. Two runs may record the same records at once: recording a replacement again changes nothing, and a record that the other run removed already is not missed.
 
+## Repair
+
+Lines are only ever added to the notes. A step of the reflog of `refs/notes/replaces` after which a note lacks a line it held before was therefore made by a writer that overwrote another, such as `git notes add` in a git that moves the ref without naming the commit it read, which builds its commit on the notes as they were when it started, or by a note removed by hand. Such a step cannot be told from the history of the ref, since the overwriting commit has the one it overwrote as its parent; only the notes themselves tell.
+
+After each write, the hook, `replaces-index-record` and `git pull-replaces` check the steps of the reflog since the last check, through `git diff-tree` between the commits of each step, and write back, as `record` writes, the lines of each note that a step dropped. They say so:
+
+```
+replaces-index: a writer dropped lines from refs/notes/replaces when it moved it from <commit> to <commit>; they are put back
+```
+
+The commit up to which the reflog was checked is kept in `replaces-checked` in the common git directory, so that each step is checked once; a run checks the step of its own write, and any of other writers since. A note removed with `git notes remove` is put back as well. A clone that keeps no reflog of the notes ref, as a bare clone does unless `core.logAllRefUpdates` says otherwise, is not checked, and neither is a step that the reflog no longer holds once it expired.
+
 ## Index
 
 The queries read an index of the notes, kept in `replaces/index.redb` in the common git directory. Each clone builds its own and its worktrees share it; the index is never committed or pushed, and may be deleted at any time, after which the next query builds it anew. It is a redb database that holds each `replaces:` line as an edge in both directions, so that both what a commit stands in place of and what was made from it are found without reading the notes.
@@ -168,5 +180,5 @@ When filter-repo runs on a repository it has already filtered, it composes the n
 - Notes name commits by id only. A commit that is no longer reachable is eventually removed by garbage collection, after which its id can still be looked up but its contents cannot be read.
 - A rebase interrupted while its `post-rewrite` hooks run, for instance by Ctrl-C, has already rewritten the branch, but leaves `rebase-merge/` behind, so that `git status` reports a rebase under way. The operator must end it with `git rebase --quit`, which keeps the branch as it is: `git rebase --abort` would reset the branch to where it was before the rebase.
 - A hook ended by `SIGKILL`, which cannot be handled, loses the rewrite it was recording.
-- `git notes` moves a notes ref without naming the commit it moved it from, so that a `git notes` command on `refs/notes/replaces`, or a note that git copies to it on a rewrite when `notes.rewriteRef` matches it, can drop a note that the hook writes at the same time. Every program of the replaces index moves the ref only from the commit it read.
+- `git notes` moves a notes ref without naming the commit it moved it from, so that a `git notes` command on `refs/notes/replaces`, or a note that git copies to it on a rewrite when `notes.rewriteRef` matches it, can drop a note that the hook writes at the same time. Every program of the replaces index moves the ref only from the commit it read, and the next one to write puts dropped lines back, as long as the reflog of the notes ref holds the step that dropped them.
 - `git notes --ref=replaces prune` must not be run: it removes the notes of every commit the clone lacks, including those of commits made in other clones.
