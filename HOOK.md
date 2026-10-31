@@ -40,13 +40,15 @@ Git runs `post-rewrite` after `git commit --amend` and after a rebase, with one 
 
 `record` writes the commit to a ref of its own, `refs/replaces-index/record-<random>`, and moves `refs/notes/replaces` to it only if the notes ref still points at the commit it read, then removes its own ref. When git refuses to move the notes ref, `record` reads it again. If another writer, such as a rebase in another worktree, moved it in the meantime, `record` reads the notes again and retries. If it did not move and its lock file exists, another process holds the lock, and `record` retries as well. A refusal with no lock in sight is taken for one that will not end once it recurs three times in a row, and `record` then fails. Before each retry, `record` waits a random time up to a ceiling that starts at 50 milliseconds and doubles with each retry up to a second, so that writers that collided spread out. It retries for as long as the ref keeps moving or stays locked: no write therefore replaces another, and a process that must end sooner is ended by a signal. No git command it runs is given a time limit either, since a repository on a network filesystem may answer slowly.
 
-Once the hook has run for a second, it prints what it waits for every second, until it ends:
+Once the hook has run for a second, it prints what it waits for every second, until it ends, and the command that interrupts it alone:
 
 ```
-replaces-index: waiting for git fast-import --quiet --force (3s; signal to abandon)
-replaces-index: refs/notes/replaces is locked, retrying (attempt 14, 5s; signal to abandon)
-replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; signal to abandon)
+replaces-index: waiting for git fast-import --quiet --force (3s; kill 4242 to abandon)
+replaces-index: refs/notes/replaces is locked, retrying (attempt 14, 5s; kill 4242 to abandon)
+replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; kill 4242 to abandon)
 ```
+
+The operator should interrupt the hook alone, rather than press Ctrl-C, which interrupts git as well: git runs `post-rewrite` once the rewrite is complete, and a rebase interrupted while it runs leaves its state directory behind, so that git takes the finished rebase for one under way.
 
 - An amend records that the new commit was made from the amended one.
 - A rebase records the same for each commit it creates.
@@ -164,5 +166,6 @@ When filter-repo runs on a repository it has already filtered, it composes the n
 - Rewrites by tools other than `git commit --amend`, `git rebase` and `git filter-repo` are not recorded, among them `git replay`, `git cherry-pick` and a rewrite made by hand, such as `git reset --soft HEAD~` followed by `git commit`.
 - `git rebase --quit` ends a rebase without running `post-rewrite`, so the rewrites the rebase had made are not recorded.
 - Notes name commits by id only. A commit that is no longer reachable is eventually removed by garbage collection, after which its id can still be looked up but its contents cannot be read.
+- A rebase interrupted while its `post-rewrite` hooks run, for instance by Ctrl-C, has already rewritten the branch, but leaves `rebase-merge/` behind, so that `git status` reports a rebase under way. The operator must end it with `git rebase --quit`, which keeps the branch as it is: `git rebase --abort` would reset the branch to where it was before the rebase.
 - A hook ended by `SIGKILL`, which cannot be handled, loses the rewrite it was recording, and leaves the ref it staged the notes in, under `refs/replaces-index/`, which nothing reads.
 - `git notes --ref=replaces prune` must not be run: it removes the notes of every commit the clone lacks, including those of commits made in other clones.

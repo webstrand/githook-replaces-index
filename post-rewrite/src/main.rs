@@ -224,6 +224,9 @@ impl Hook {
 /// What the hook waits for, `elapsed` after it started.
 fn heartbeat(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
+    // Only the hook is to be interrupted: Ctrl-C would end git as well, and a rebase that ends
+    // while its post-rewrite runs leaves its state behind, as though it were still under way.
+    let abandon = format!("kill {} to abandon", process::id());
     let progress = replaces_index_record::progress();
     let running = runner::running();
     let waiting = match running.first() {
@@ -237,11 +240,11 @@ fn heartbeat(elapsed: Duration) -> String {
                 Retry::Locked => "is locked",
             };
             format!(
-                "{REF} {why}, retrying (attempt {}, {seconds}s; signal to abandon)",
+                "{REF} {why}, retrying (attempt {}, {seconds}s; {abandon})",
                 progress.attempt
             )
         }
-        None => format!("{waiting} ({seconds}s; signal to abandon)"),
+        None => format!("{waiting} ({seconds}s; {abandon})"),
     }
 }
 

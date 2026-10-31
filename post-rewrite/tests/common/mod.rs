@@ -221,10 +221,19 @@ pub fn fake_git_racing(dir: &Path) -> PathBuf {
     write_fake_git(dir, &body)
 }
 
-/// Runs `command` in a process group of its own and, once its standard error contains `waiting`,
-/// interrupts the group as Ctrl-C does. Returns the standard error of the command and of every
-/// process that shared it, once they have all closed it.
-pub fn interrupt_when(mut command: Command, waiting: &str) -> String {
+/// How a test interrupts a hook that waits.
+#[derive(Clone, Copy)]
+pub enum Interrupt {
+    /// Interrupts the whole process group, git included, as Ctrl-C does.
+    Group,
+    /// Interrupts the hook alone, as the heartbeat it prints says to.
+    AsPrinted,
+}
+
+/// Runs `command` in a process group of its own and, once the hook says how to abandon what it
+/// waits for, interrupts it as `how` says. Returns the standard error of the command and of every
+/// process that shared it, once they have all closed it, and whether the command succeeded.
+pub fn interrupt_waiting(mut command: Command, how: Interrupt) -> (String, bool) {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     let mut child = command
@@ -247,18 +256,34 @@ pub fn interrupt_when(mut command: Command, waiting: &str) -> String {
         })
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while !seen.lock().unwrap().contains(waiting) {
+    let hook = loop {
         let stderr = seen.lock().unwrap().clone();
+        if let Some(pid) = printed_pid(&stderr) {
+            break pid;
+        }
         assert!(
             std::time::Instant::now() < deadline,
             "never waiting: {stderr}"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    match how {
+        Interrupt::Group => kill("INT", &format!("-{}", child.id())),
+        Interrupt::AsPrinted => kill("INT", &hook),
     }
-    kill("INT", &format!("-{}", child.id()));
-    child.wait().unwrap();
+    let status = child.wait().unwrap();
     reader.join().unwrap();
-    seen.lock().unwrap().clone()
+    let stderr = seen.lock().unwrap().clone();
+    (stderr, status.success())
+}
+
+/// The process id in the first `kill <pid> to abandon` that `stderr` holds.
+fn printed_pid(stderr: &str) -> Option<String> {
+    let before = &stderr[..stderr.find(" to abandon")?];
+    let pid = &before[before.rfind("kill ")? + "kill ".len()..];
+    pid.bytes()
+        .all(|b| b.is_ascii_digit())
+        .then(|| pid.to_owned())
 }
 
 /// Waits until the git that `fake_git_holding` made holds, and returns its process id.

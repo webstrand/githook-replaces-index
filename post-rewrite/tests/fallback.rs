@@ -7,8 +7,8 @@ use std::fs;
 use std::path::Path;
 
 use common::{
-    abandoned, amend_of, commit, fake_git, git, hook, interrupt_when, note, notes_lock, ok,
-    rebase_keeping, repo, stderr_of,
+    Interrupt, abandoned, amend_of, commit, fake_git, git, hook, interrupt_waiting, note,
+    notes_lock, ok, rebase_keeping, repo, stderr_of,
 };
 
 /// A scratch repository with commits `a` and `b` on a branch, and a branch `upstream` with a
@@ -111,7 +111,7 @@ fn a_rebase_whose_amends_cannot_be_read_abandons_what_git_reported() {
     let script = format!("1s|$|\\nexec git commit -q --amend -m amended\\n{BREAK_AMENDS}|");
     let mut command = git(repo.path(), &["rebase", "-q", "-i", "upstream"]);
     command.env("GIT_SEQUENCE_EDITOR", format!("sed -i -e '{script}'"));
-    let stderr = interrupt_when(command, "signal to abandon");
+    let (stderr, _) = interrupt_waiting(command, Interrupt::AsPrinted);
     let a2 = ok(repo.path(), &["rev-parse", "HEAD~"]);
     let b1 = ok(repo.path(), &["rev-parse", "HEAD"]);
     let lines = abandoned(repo.path());
