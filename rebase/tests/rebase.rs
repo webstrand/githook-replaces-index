@@ -103,7 +103,15 @@ fn leaves_out_the_commits_the_upstream_rewrote() {
     assert!(ok, "{stderr}");
     assert_eq!(
         stdout,
-        "rebase-replaces: replaying 1 commits onto @{upstream}, leaving out 2 it already holds\n"
+        format!(
+            "rebase-replaces: leaving out {} a: @{{upstream}} holds {} made from it\n\
+             rebase-replaces: leaving out {} b: @{{upstream}} holds {} made from it\n\
+             rebase-replaces: replaying 1 commits onto @{{upstream}}, leaving out 2 it already holds\n",
+            &a[..7],
+            &a2[..12],
+            &b[..7],
+            &b2[..12]
+        )
     );
     assert_eq!(subjects(clone.path()), ["base", "a'", "b'", "x"]);
 }
@@ -115,6 +123,10 @@ fn leaves_out_the_commits_the_reflog_shows() {
     assert!(ok, "{stderr}");
     assert!(
         stdout.contains("leaving out 2 it already holds"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("the reflog of origin/main shows that it held it"),
         "{stdout}"
     );
     assert_eq!(subjects(clone.path()), ["base", "a'", "b'", "x"]);
@@ -138,4 +150,74 @@ fn replays_a_commit_rewritten_as_commits_the_upstream_lacks() {
         "f".repeat(12)
     );
     assert!(stderr.starts_with(&warning), "{stderr}");
+}
+
+/// Records in the notes of `repo` that `new` was made from each of `olds`.
+fn replaced_from(repo: &Path, olds: &[&str], new: &str) {
+    let lines: String = olds
+        .iter()
+        .map(|old| format!("replaces: {old}\n"))
+        .collect();
+    git(
+        repo,
+        &[
+            "notes",
+            "--ref=replaces",
+            "add",
+            "-f",
+            "-m",
+            lines.trim_end(),
+            new,
+        ],
+    );
+}
+
+/// `rewritten`, with `b'` changing `b`, and a `fixup! b` commit on top of the clone's `x`, which
+/// a rebase with `rebase.autoSquash` folds into `b`, and its id.
+fn rewritten_with_fixup() -> (tempfile::TempDir, tempfile::TempDir, [String; 5]) {
+    let (upstream, clone, [a, b, a2, _]) = rewritten();
+    // `b'` changes `b`, so that git does not skip `b` as a commit the upstream applied already.
+    std::fs::write(upstream.path().join("b"), "b, changed").unwrap();
+    git(
+        upstream.path(),
+        &["commit", "-q", "-a", "--amend", "-m", "b'"],
+    );
+    let b2 = git(upstream.path(), &["rev-parse", "HEAD"]);
+    let f = commit(clone.path(), "f", "fixup! b");
+    git(clone.path(), &["config", "rebase.autoSquash", "true"]);
+    git(clone.path(), &["reflog", "expire", "--expire=now", "--all"]);
+    (upstream, clone, [a, b, a2, b2, f])
+}
+
+#[test]
+fn leaves_out_a_fixup_that_the_upstream_folded_in() {
+    let (upstream, clone, [a, b, a2, b2, f]) = rewritten_with_fixup();
+    replaced(upstream.path(), &a, &a2);
+    replaced_from(upstream.path(), &[&b, &f], &b2);
+
+    let (ok, stdout, stderr) = run(clone.path(), REBASE, &[]);
+    assert!(ok, "{stderr}");
+    assert!(
+        stdout.contains("leaving out 3 it already holds"),
+        "{stdout}"
+    );
+    assert_eq!(subjects(clone.path()), ["base", "a'", "b'", "x"]);
+}
+
+#[test]
+fn refuses_a_fixup_of_a_commit_left_out_that_the_upstream_lacks() {
+    let (upstream, clone, [a, b, a2, b2, f]) = rewritten_with_fixup();
+    replaced(upstream.path(), &a, &a2);
+    replaced(upstream.path(), &b, &b2);
+    let head = git(clone.path(), &["rev-parse", "HEAD"]);
+
+    let (ok, _, stderr) = run(clone.path(), REBASE, &[]);
+    assert!(!ok, "{stderr}");
+    assert!(
+        stderr.contains(&format!("{} fixup! b would fold into", &f[..7])),
+        "{stderr}"
+    );
+    assert!(stderr.contains("nothing was rebased"), "{stderr}");
+    assert_eq!(git(clone.path(), &["rev-parse", "HEAD"]), head);
+    assert!(!clone.path().join(".git/rebase-merge").exists());
 }

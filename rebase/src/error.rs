@@ -26,6 +26,8 @@ pub enum Error {
     Read { path: PathBuf, source: io::Error },
     #[error("could not find this program's executable: {0}")]
     CurrentExe(#[source] io::Error),
+    #[error("{0}; nothing was rebased")]
+    Stranded(String),
     #[error("could not run git rebase: {0}")]
     Rebase(#[source] io::Error),
 }

@@ -169,7 +169,10 @@ The refspec is a glob so that a remote without replaces notes matches nothing: a
 
 1. When `<upstream>` is a remote-tracking branch, it fetches the remote, and its replaces notes in the same fetch, and merges them as `git pull-replaces` does.
 2. Of the commits of the branch that the upstream lacks, it leaves out each one for which `git compare-replaces HEAD <upstream>` prints a `held` line, and each one that the upstream's reflog shows it once held.
-3. It replays the others onto the upstream through `git rebase -i`, with the commits left out marked `drop` in the list.
+3. It names each commit it leaves out, and why: the upstream commits made from it, or the upstream's reflog.
+4. It replays the others onto the upstream through `git rebase -i`, with the commits left out marked `drop` in the list.
+
+With `rebase.autoSquash`, `git rebase -i` lists each `fixup!` or `squash!` commit after the commit it folds into. One that the upstream holds in another form is left out as well. One that it does not, but that would fold into a commit left out, has nowhere to go: it is no part of the upstream, and folded into the commit before it, it would change another. The command then refuses the rebase before it starts, names the commits, and changes nothing.
 
 A commit that was rewritten as commits the upstream lacks, for instance in a clone whose notes were not pulled, is replayed, and the command says so. A rebase that stops on a conflict continues and ends as any rebase does, and the hook records its rewrites. The command does not fetch when `<upstream>` is a local branch, and uses the notes already in the clone.
 
