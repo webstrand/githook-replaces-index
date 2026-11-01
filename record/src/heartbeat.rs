@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{REF, Retry, progress};
+use crate::{LOCK_PATIENCE, Lock, REF, Retry, progress};
 
 /// How often a program says what it waits for, once it has waited that long.
 pub const EVERY: Duration = Duration::from_secs(1);
@@ -20,10 +20,14 @@ pub fn line(elapsed: Duration, stop: &str) -> String {
                 Retry::Moved => "keeps moving",
                 Retry::Locked => "is locked",
             };
-            format!(
+            let line = format!(
                 "{REF} {why}, retrying (attempt {}, {seconds}s; {stop})",
                 progress.attempt
-            )
+            );
+            match stale(progress.lock.as_ref()) {
+                Some(stale) => format!("{line}; {stale}"),
+                None => line,
+            }
         }
         None => match runner::running().first() {
             Some(command) => format!("waiting for {command} ({seconds}s; {stop})"),
@@ -31,6 +35,26 @@ pub fn line(elapsed: Duration, stop: &str) -> String {
         },
     }
 }
+
+/// What to do about `lock`, once it has been held for `STALE`: git holds the lock of a ref for
+/// moments only, and one that has been there that long was most likely left by a git ended by
+/// `SIGKILL`, which git then refuses to take as well. The writer retries until it has been held
+/// for `LOCK_PATIENCE`, since a git on a slow filesystem may yet let go of it.
+fn stale(lock: Option<&Lock>) -> Option<String> {
+    let lock = lock?;
+    let age = lock.modified?.elapsed().ok()?;
+    (age >= STALE).then(|| {
+        format!(
+            "{} was taken {}s ago; if no git command is running, it was left behind, and removing it lets the write through; the write is given up once it has been held for {}s",
+            lock.path.display(),
+            age.as_secs(),
+            LOCK_PATIENCE.as_secs()
+        )
+    })
+}
+
+/// How long a lock is held before the writer says that it may have been left behind.
+pub const STALE: Duration = Duration::from_secs(10);
 
 /// Runs `work`, and says on standard error, after `prefix`, what it waits for every second once
 /// it has taken a second.

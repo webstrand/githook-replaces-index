@@ -416,3 +416,45 @@ fn a_reftable_lock_held_for_a_while_is_waited_for() {
     assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
     assert!(abandoned(repo).is_empty());
 }
+
+#[test]
+fn a_lock_left_behind_abandons_the_rewrite() {
+    let (repo, a, a2) = amended();
+    let lock = notes_lock(repo.path());
+    fs::write(&lock, "").unwrap();
+    // Taken longer ago than the hook waits for, as by a git that SIGKILL ended.
+    let taken = std::time::SystemTime::now() - Duration::from_secs(60);
+    fs::File::options()
+        .write(true)
+        .open(&lock)
+        .unwrap()
+        .set_modified(taken)
+        .unwrap();
+    let started = Instant::now();
+    let (stderr, _) = failing(hook(repo.path(), "amend", format!("{a} {a2}\n"), None));
+    assert!(started.elapsed() < Duration::from_secs(10), "{stderr}");
+    assert!(
+        stderr.contains("replaces.lock has been held for"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("removing it lets the write through"),
+        "{stderr}"
+    );
+    assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
+
+    // Once the lock is gone, the next rewrite records the abandoned one.
+    fs::remove_file(&lock).unwrap();
+    let b = commit(repo.path(), "b");
+    let b2 = amend_of(repo.path(), &b);
+    let output = hook(repo.path(), "amend", format!("{b} {b2}\n"), None)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+    assert!(abandoned(repo.path()).is_empty());
+}

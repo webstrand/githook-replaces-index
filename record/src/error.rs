@@ -17,6 +17,14 @@ pub enum Error {
     NotAnId(String),
     #[error("{0} is not a commit of this clone, so no note can be written for it")]
     NotInClone(String),
+    #[error(
+        "could not write {REF}: {} has been held for {seconds}s; if no git command is running, it was left behind, and removing it lets the write through",
+        path.display()
+    )]
+    Locked {
+        path: std::path::PathBuf,
+        seconds: u64,
+    },
     #[error("could not read or write {path}: {source}")]
     Checked {
         path: std::path::PathBuf,

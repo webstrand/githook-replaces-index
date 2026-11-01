@@ -28,9 +28,9 @@ pub use crate::repair::{Repaired, repair, repair_and_say};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::hash::{BuildHasher, RandomState};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use runner::git;
 
@@ -49,6 +49,12 @@ const LONGEST_WAIT: Duration = Duration::from_secs(1);
 
 /// The refusals in a row, with no lock seen, after which a writer gives up.
 const REFUSALS: u32 = 3;
+
+/// How long a lock of the ref may have been held before a writer gives up. Git holds it for
+/// moments only, and gives up itself after 100 milliseconds, so that one held this long was most
+/// likely left behind by a git ended by `SIGKILL`. A writer that gives up keeps its rewrite as an
+/// abandoned record, which the next writer records once the lock is gone.
+pub const LOCK_PATIENCE: Duration = Duration::from_secs(30);
 
 /// The replacements of a rewrite, each from the commit it was made from to the commit it made, in
 /// the order the rewrite reported them.
@@ -181,8 +187,11 @@ fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
     let mut ident = None;
     let mut ceiling = FIRST_WAIT;
     let mut refusals = 0;
+    // The lock that the attempts found, and when they first found it.
+    let mut seen: Option<(Lock, Instant)> = None;
     loop {
         progress_mut().attempt += 1;
+        let mut lock = None;
         let retry = match attempt(change, &mut ident)? {
             Attempt::Written => {
                 written();
@@ -192,8 +201,29 @@ fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
                 refusals = 0;
                 Retry::Moved
             }
-            Attempt::Locked => {
+            Attempt::Locked(found) => {
                 refusals = 0;
+                let since = match &seen {
+                    Some((last, since)) if *last == found => *since,
+                    _ => Instant::now(),
+                };
+                // Held since it was written, or since it was first seen, whichever is longer:
+                // a lock whose time is of a clock that runs ahead, as on a network filesystem,
+                // is given up on all the same, and one that lags is given up on early, as git
+                // gives up on any. The lock itself is never taken or removed.
+                let held = found
+                    .modified
+                    .and_then(|modified| modified.elapsed().ok())
+                    .unwrap_or_default()
+                    .max(since.elapsed());
+                if held >= LOCK_PATIENCE {
+                    return Err(Error::Locked {
+                        path: found.path,
+                        seconds: held.as_secs(),
+                    });
+                }
+                seen = Some((found.clone(), since));
+                lock = Some(found);
                 Retry::Locked
             }
             // A lock may be let go of between the refusal and the look for it, so that only a
@@ -206,7 +236,11 @@ fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
                 Retry::Locked
             }
         };
-        progress_mut().retrying = Some(retry);
+        {
+            let mut progress = progress_mut();
+            progress.retrying = Some(retry);
+            progress.lock = lock;
+        }
         // Writers that lost to each other wait for different times before retrying.
         let ceiling_ms = u64::try_from(ceiling.as_millis()).unwrap_or(u64::MAX);
         std::thread::sleep(Duration::from_millis(random() % (ceiling_ms + 1)));
@@ -215,12 +249,22 @@ fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
 }
 
 /// How the writer of this process fares.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Progress {
     /// The attempts made so far, the one under way included.
     pub attempt: u32,
     /// Why the writer retries, once an attempt has failed.
     pub retrying: Option<Retry>,
+    /// The lock that the last attempt found held, if any.
+    pub lock: Option<Lock>,
+}
+
+/// A lock file that another process holds, or that a process ended by `SIGKILL` left behind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lock {
+    pub path: PathBuf,
+    /// When it was last written, which git does as it takes the lock.
+    pub modified: Option<SystemTime>,
 }
 
 /// Why a writer retries.
@@ -235,6 +279,7 @@ pub enum Retry {
 static PROGRESS: Mutex<Progress> = Mutex::new(Progress {
     attempt: 0,
     retrying: None,
+    lock: None,
 });
 
 fn progress_mut() -> std::sync::MutexGuard<'static, Progress> {
@@ -245,7 +290,7 @@ fn progress_mut() -> std::sync::MutexGuard<'static, Progress> {
 
 /// How the writer of this process fares.
 pub fn progress() -> Progress {
-    *progress_mut()
+    progress_mut().clone()
 }
 
 /// The outcome of one attempt to write the ref.
@@ -254,7 +299,7 @@ enum Attempt {
     /// Another writer moved the ref after it was read.
     Moved,
     /// Another process held the lock of the ref.
-    Locked,
+    Locked(Lock),
     /// git refused to move the ref, which did not move, and no lock was seen.
     Refused(runner::Error),
 }
@@ -338,8 +383,8 @@ fn refused(parent: Option<&str>, err: runner::Error) -> Result<Attempt, Error> {
     if notes_commit()?.as_deref() != parent {
         return Ok(Attempt::Moved);
     }
-    if refs_locked()? {
-        return Ok(Attempt::Locked);
+    if let Some(lock) = refs_lock()? {
+        return Ok(Attempt::Locked(lock));
     }
     Ok(Attempt::Refused(err))
 }
@@ -454,9 +499,9 @@ fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
         .collect())
 }
 
-/// Whether another process holds the lock of the ref: its own lock file in a repository that keeps
+/// The lock of the ref, if another process holds it: its own lock file in a repository that keeps
 /// refs as files, or the lock of the list of tables in one that keeps them in a reftable.
-fn refs_locked() -> Result<bool, Error> {
+fn refs_lock() -> Result<Option<Lock>, Error> {
     let out = runner::stdout(&mut git([
         "rev-parse",
         "--path-format=absolute",
@@ -470,10 +515,13 @@ fn refs_locked() -> Result<bool, Error> {
     let reftable = lines
         .next()
         .map(|common| common.join("reftable/tables.list.lock"));
-    Ok([ref_lock, reftable]
-        .into_iter()
-        .flatten()
-        .any(|lock| lock.exists()))
+    Ok([ref_lock, reftable].into_iter().flatten().find_map(|path| {
+        let metadata = std::fs::metadata(&path).ok()?;
+        Some(Lock {
+            modified: metadata.modified().ok(),
+            path,
+        })
+    }))
 }
 
 /// The commit that the ref points to, if it exists.

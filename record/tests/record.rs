@@ -338,6 +338,30 @@ fn rewrites_a_note_at_the_path_it_was_found_at() {
 }
 
 #[test]
+fn says_when_a_lock_may_have_been_left_behind() {
+    let (dir, ids) = repo(["a", "b"]);
+    let (repo, [a, b]) = (dir.path(), ids.each_ref());
+    let release = lock_for_a_while(repo);
+    let lock = repo.join(".git/refs/notes/replaces.lock");
+    let taken = std::time::SystemTime::now() - std::time::Duration::from_secs(15);
+    std::fs::File::options()
+        .write(true)
+        .open(&lock)
+        .unwrap()
+        .set_modified(taken)
+        .unwrap();
+    let output = run_record(repo, &format!("{a} {b}\n"));
+    release.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("replaces.lock was taken")
+            && stderr.contains("removing it lets the write through"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn refuses_a_new_commit_the_clone_lacks_without_retrying() {
     let (dir, ids) = repo(["a"]);
     let (repo, [a]) = (dir.path(), ids.each_ref());
