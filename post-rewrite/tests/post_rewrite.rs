@@ -202,3 +202,28 @@ fn a_rebase_records_one_amend_at_an_edit_of_a_commit_it_kept() {
     ok(repo.path(), &["rebase", "--continue"]);
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
 }
+
+#[test]
+fn a_repository_whose_path_is_not_utf8_is_found() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    std::fs::create_dir(&repo).unwrap();
+    ok(&repo, &["init", "-q"]);
+    ok(
+        &repo,
+        &["config", "hook.replaces-index.event", "post-rewrite"],
+    );
+    ok(
+        &repo,
+        &["config", "hook.replaces-index.command", common::HOOK],
+    );
+    ok(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let a = commit(&repo, "a");
+    // `ok` fails on anything the hook says, such as a file of the common git directory it could
+    // not find.
+    ok(&repo, &["commit", "-q", "--amend", "-m", "a, amended"]);
+    let a2 = ok(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(note(&repo, &a2), [format!("replaces: {a}")]);
+    assert!(repo.join(".git/replaces-checked").is_file());
+}

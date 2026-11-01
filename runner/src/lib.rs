@@ -1,7 +1,8 @@
 //! Runs git for the replaces-index programs, and reports its failures.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::Mutex;
@@ -184,8 +185,26 @@ pub fn check(command: &Command, output: &Output) -> Result<(), Error> {
 
 /// The output of `git rev-parse` for one of its path options, such as `--git-path <path>`.
 pub fn rev_parse_path(args: &[&str]) -> Result<PathBuf, Error> {
-    let out = stdout(&mut git(["rev-parse"].iter().chain(args)))?;
-    Ok(PathBuf::from(out.trim_end_matches('\n')))
+    let mut paths = rev_parse_paths(args)?;
+    Ok(if paths.is_empty() {
+        PathBuf::new()
+    } else {
+        paths.swap_remove(0)
+    })
+}
+
+/// The output of `git rev-parse` for its path options, one path per line, as the bytes git prints:
+/// a path need not be UTF-8, and one read as text would name another.
+pub fn rev_parse_paths(args: &[&str]) -> Result<Vec<PathBuf>, Error> {
+    let mut command = git(["rev-parse"].iter().chain(args));
+    let output = run(&mut command)?;
+    check(&command, &output)?;
+    Ok(output
+        .stdout
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| PathBuf::from(OsString::from_vec(line.to_vec())))
+        .collect())
 }
 
 /// The contents of the objects `ids`, in their order, read by one `git cat-file --batch`; `None`

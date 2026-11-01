@@ -28,7 +28,7 @@ pub use crate::repair::{Repaired, repair, repair_and_say};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::hash::{BuildHasher, RandomState};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -502,17 +502,17 @@ fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
 /// The lock of the ref, if another process holds it: its own lock file in a repository that keeps
 /// refs as files, or the lock of the list of tables in one that keeps them in a reftable.
 fn refs_lock() -> Result<Option<Lock>, Error> {
-    let out = runner::stdout(&mut git([
-        "rev-parse",
+    let lock = format!("{REF}.lock");
+    let paths = runner::rev_parse_paths(&[
         "--path-format=absolute",
         "--git-path",
-        &format!("{REF}.lock"),
+        &lock,
         "--git-common-dir",
-    ]))
+    ])
     .map_err(Error::Write)?;
-    let mut lines = out.lines().map(std::path::Path::new);
-    let ref_lock = lines.next().map(Path::to_owned);
-    let reftable = lines
+    let mut paths = paths.into_iter();
+    let ref_lock = paths.next();
+    let reftable = paths
         .next()
         .map(|common| common.join("reftable/tables.list.lock"));
     Ok([ref_lock, reftable].into_iter().flatten().find_map(|path| {

@@ -22,7 +22,9 @@
 mod error;
 
 use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -138,11 +140,9 @@ fn rebase(upstream: &str) -> Result<ExitCode, Error> {
     })?;
     let exe = std::env::current_exe().map_err(Error::CurrentExe)?;
     // Git runs the editor through the shell, with the path of the todo list appended.
-    let editor = format!(
-        "{} --edit-todo {}",
-        quote(&exe.to_string_lossy()),
-        quote(&drop_path.to_string_lossy())
-    );
+    let mut editor = quote(exe.as_os_str());
+    editor.push(" --edit-todo ");
+    editor.push(quote(drop_path.as_os_str()));
     let status = git(["rebase", "-i", &up])
         .env("GIT_SEQUENCE_EDITOR", editor)
         .status()
@@ -232,7 +232,16 @@ fn resolve(name: &str) -> Option<String> {
     (output.status.success() && !id.is_empty()).then_some(id)
 }
 
-/// A word that the shell reads back as `word`.
-fn quote(word: &str) -> String {
-    format!("'{}'", word.replace('\'', r"'\''"))
+/// A word that the shell reads back as `word`, whatever its bytes.
+fn quote(word: &OsStr) -> OsString {
+    let mut quoted = vec![b'\''];
+    for &byte in word.as_bytes() {
+        if byte == b'\'' {
+            quoted.extend_from_slice(br"'\''");
+        } else {
+            quoted.push(byte);
+        }
+    }
+    quoted.push(b'\'');
+    OsString::from_vec(quoted)
 }
