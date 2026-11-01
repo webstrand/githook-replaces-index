@@ -148,7 +148,7 @@ Each line ends with the commit's subject. Nothing of `old` is lost in `new` when
 
 Each clone records the rewrites made in it. `git pull-replaces <remote>` merges a remote's notes into the local ones:
 
-1. It fetches the remote's `refs/notes/replaces` into `refs/notes/remotes/<remote>/replaces`. The fetch names its refspec itself, so the remote needs no configuration.
+1. It fetches the remote's `refs/notes/replaces` into `refs/notes/remotes/<remote>/replaces`, through one `git fetch`, whose output also tells whether the remote has any. The fetch names its refspec itself, so the remote needs no configuration.
 2. It merges that into the local `refs/notes/replaces` as `record` writes it: the merge takes the union of each note's lines, which never conflicts, keeps the remote's notes commit as a parent, and moves the ref only from the commit it read, retrying as `record` does. A note that the local ref lacks is written at the fanout of the local notes, rather than at its path in the remote's, whose fanout may differ. When either notes commit holds the other, the ref is left as it is, or moved to the remote's.
 
 Lines are only ever added to notes, so the union is the whole merge. The remote is not changed. Two clones that each record rewrites hold the same notes once each has pulled from the other, after the last rewrite in either; a host that cannot reach the operator's clone receives no notes from it. A clone may pull from several remotes in turn.
@@ -167,7 +167,7 @@ The refspec is a glob so that a remote without replaces notes matches nothing: a
 
 `git rebase-replaces [<upstream>]` rebases the current branch onto `<upstream>`, by default its configured upstream, and leaves out every commit of the branch that the upstream already holds in another form:
 
-1. When `<upstream>` is a remote-tracking branch, it fetches the remote and merges its replaces notes, as `git pull-replaces` does.
+1. When `<upstream>` is a remote-tracking branch, it fetches the remote, and its replaces notes in the same fetch, and merges them as `git pull-replaces` does.
 2. Of the commits of the branch that the upstream lacks, it leaves out each one for which `git compare-replaces HEAD <upstream>` prints a `held` line, and each one that the upstream's reflog shows it once held.
 3. It replays the others onto the upstream through `git rebase -i`, with the commits left out marked `drop` in the list.
 

@@ -6,8 +6,8 @@
 //! rewritten, the branch still holds the old versions of its commits, and those it cannot match
 //! are replayed on top of their own replacements.
 //!
-//! When <upstream> is a remote-tracking branch, its remote is fetched first and its replaces notes
-//! are merged through `pull`. A commit of the branch that the upstream lacks is then left out
+//! When <upstream> is a remote-tracking branch, its remote is fetched first, its replaces notes
+//! with it in the same fetch, and they are merged through `pull`. A commit of the branch that the upstream lacks is then left out
 //! when:
 //!
 //! - the upstream holds a commit that was made from it, through any number of rewrites, as
@@ -28,7 +28,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use replaces_index_compare::{Status, compare};
-use replaces_index_pull::{Pulled, pull};
+use replaces_index_pull::{Pulled, fetch_and_pull};
 use runner::git;
 
 use crate::error::Error;
@@ -73,11 +73,7 @@ fn rebase(upstream: &str) -> Result<ExitCode, Error> {
         .filter(|remote| full.starts_with(&format!("refs/remotes/{remote}/")))
         .max_by_key(|remote| remote.len());
     if let Some(remote) = remote {
-        runner::status(&mut git(["fetch", "-q", remote])).map_err(|source| Error::Fetch {
-            remote: remote.to_owned(),
-            source,
-        })?;
-        let pulled = pull(remote).map_err(|source| Error::Pull {
+        let pulled = fetch_and_pull(remote).map_err(|source| Error::Pull {
             remote: remote.to_owned(),
             source,
         })?;

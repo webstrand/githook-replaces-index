@@ -163,7 +163,7 @@ fn fails_when_the_remote_cannot_be_reached() {
     let (ok, _, stderr) = run(ours, PULL, &["nowhere"]);
     assert!(!ok);
     assert!(
-        stderr.starts_with("pull-replaces: could not list the refs of nowhere"),
+        stderr.starts_with("pull-replaces: could not fetch nowhere"),
         "{stderr}"
     );
 }

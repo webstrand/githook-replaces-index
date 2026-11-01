@@ -9,11 +9,6 @@ pub enum Error {
         upstream: String,
         source: runner::Error,
     },
-    #[error("could not fetch {remote}: {source}")]
-    Fetch {
-        remote: String,
-        source: runner::Error,
-    },
     #[error("could not pull the replaces notes of {remote}: {source}")]
     Pull {
         remote: String,
