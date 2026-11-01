@@ -61,13 +61,20 @@ impl Index {
         })?;
         let path = dir.join("index.redb");
         let notes = notes_commit()?;
-        let deadline = Instant::now() + PATIENCE;
+        let mut deadline = Instant::now() + PATIENCE;
         loop {
             match open_current(&path, notes.as_deref())? {
                 Opened::Current(db) => return Ok(Self { db, path }),
                 Opened::Locked => {}
                 Opened::Stale => match Database::create(&path) {
-                    Ok(db) => update(&db, &path, notes.as_deref())?,
+                    Ok(db) => {
+                        update(&db, &path, notes.as_deref())?;
+                        // Reopened read-only at once, so that other processes may share it. The
+                        // time the update took was not spent waiting for them, and the wait for
+                        // them starts anew.
+                        deadline = Instant::now() + PATIENCE;
+                        continue;
+                    }
                     Err(DatabaseError::DatabaseAlreadyOpen) => {}
                     Err(source) => return Err(index_error(&path, source)),
                 },
