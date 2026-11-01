@@ -1,6 +1,6 @@
 [submodule "tools/cargo-fmt-check"]
 	path = tools/cargo-fmt-check
-	url = git@github.com:webstrand/githook-cargo-fmt-check.git
+	url = https://github.com/webstrand/githook-cargo-fmt-check.git
 [submodule "tools/tooling"]
 	path = tools/tooling
-	url = git@github.com:webstrand/tooling.git
+	url = https://github.com/webstrand/tooling.git
