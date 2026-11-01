@@ -13,7 +13,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use replaces_index_compare::{Status, compare};
+use replaces_index_compare::{Status, compare, describe};
 
 #[derive(Parser)]
 #[command(name = "git compare-replaces", about)]
@@ -33,14 +33,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let described = match describe(entries.iter().map(|entry| entry.commit.as_str())) {
+        Ok(described) => described,
+        Err(err) => {
+            eprintln!("compare-replaces: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     for entry in entries {
-        let subject = runner::stdout(&mut runner::git([
-            "log",
-            "-1",
-            "--format=%s",
-            &entry.commit,
-        ]))
-        .unwrap_or_default();
+        let subject = described
+            .get(&entry.commit)
+            .map_or("", |described| described.subject.as_str());
         let commit = &entry.commit;
         let line = match &entry.status {
             Status::Held(by) => format!("held {commit} as {}", by.join(" ")),
@@ -48,7 +51,7 @@ fn main() -> ExitCode {
             Status::Rewritten(as_) => format!("rewritten {commit} as {}", as_.join(" ")),
             Status::Missing => format!("missing {commit}"),
         };
-        println!("{line}: {}", subject.trim_end());
+        println!("{line}: {subject}");
     }
     ExitCode::SUCCESS
 }

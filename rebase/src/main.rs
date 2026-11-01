@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
-use replaces_index_compare::{Status, compare};
+use replaces_index_compare::{Status, compare, describe};
 use replaces_index_pull::{Pulled, fetch_and_pull};
 use runner::git;
 
@@ -92,6 +92,11 @@ fn rebase(upstream: &str) -> Result<ExitCode, Error> {
 
     let held = held(&full, &up)?;
     let local = compare("HEAD", &up).map_err(Error::Compare)?;
+    let rewritten = local.iter().filter_map(|entry| match entry.status {
+        Status::Rewritten(_) if !held.contains(&entry.commit) => Some(entry.commit.as_str()),
+        _ => None,
+    });
+    let described = describe(rewritten).map_err(Error::Compare)?;
     let mut drop = Vec::new();
     for entry in &local {
         let commit = entry.commit.as_str();
@@ -107,15 +112,15 @@ fn rebase(upstream: &str) -> Result<ExitCode, Error> {
             Status::Rewritten(into) => into,
             Status::Later(_) | Status::Missing => continue,
         };
-        let described = runner::stdout(&mut git(["log", "-1", "--format=%h %s", commit]))
-            .map_err(Error::List)?;
-        let short: String = rewritten
+        let (short, subject) = described
+            .get(commit)
+            .map_or((commit, ""), |d| (d.short.as_str(), d.subject.as_str()));
+        let as_: String = rewritten
             .iter()
             .map(|c| format!("{} ", &c[..c.len().min(12)]))
             .collect();
         eprintln!(
-            "rebase-replaces: {} was rewritten as {short}but {upstream} lacks it; replaying it",
-            described.trim_end()
+            "rebase-replaces: {short} {subject} was rewritten as {as_}but {upstream} lacks it; replaying it"
         );
     }
     println!(

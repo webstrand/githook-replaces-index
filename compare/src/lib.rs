@@ -6,6 +6,8 @@
 
 mod error;
 
+use std::collections::{BTreeSet, HashMap, HashSet};
+
 use replaces_index_store::Index;
 use runner::git;
 
@@ -37,30 +39,77 @@ pub fn compare(old: &str, new: &str) -> Result<Vec<Entry>, Error> {
     let new = resolve(new)?;
     let commits = runner::stdout(&mut git(["rev-list", "--reverse", &old, "--not", &new]))
         .map_err(Error::List)?;
+    // What each was made into and from, read before git runs, so that other processes may open
+    // the index meanwhile.
     let index = Index::open().map_err(Error::Index)?;
-    let mut entries = Vec::new();
-    for commit in commits.lines() {
-        let into = index.replaced_by(commit).map_err(Error::Index)?;
-        let held_into = held(&new, &into)?;
-        let status = if !held_into.is_empty() {
-            Status::Held(held_into)
-        } else {
+    let related = commits
+        .lines()
+        .map(|commit| {
+            let into = index.replaced_by(commit).map_err(Error::Index)?;
             let from = index.replaces(commit).map_err(Error::Index)?;
-            let earlier = held(&new, &from)?;
-            if !earlier.is_empty() {
+            Ok((commit, into, from))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    drop(index);
+    let held = held(
+        &new,
+        related
+            .iter()
+            .flat_map(|(_, into, from)| into.iter().chain(from)),
+    )?;
+    Ok(related
+        .into_iter()
+        .map(|(commit, into, from)| {
+            let held_into: Vec<String> =
+                into.iter().filter(|c| held.contains(*c)).cloned().collect();
+            let earlier: Vec<String> = from.into_iter().filter(|c| held.contains(c)).collect();
+            let status = if !held_into.is_empty() {
+                Status::Held(held_into)
+            } else if !earlier.is_empty() {
                 Status::Later(earlier)
             } else if !into.is_empty() {
                 Status::Rewritten(into.into_iter().collect())
             } else {
                 Status::Missing
+            };
+            Entry {
+                commit: commit.to_owned(),
+                status,
             }
-        };
-        entries.push(Entry {
-            commit: commit.to_owned(),
-            status,
-        });
+        })
+        .collect())
+}
+
+/// A commit's abbreviated id and subject.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Described {
+    pub short: String,
+    pub subject: String,
+}
+
+/// The abbreviated id and subject of each of `commits`, which the clone has, by one `git log`.
+pub fn describe<'a>(
+    commits: impl IntoIterator<Item = &'a str>,
+) -> Result<HashMap<String, Described>, Error> {
+    let input: String = commits.into_iter().map(|c| format!("{c}\n")).collect();
+    // git log reads no commit as HEAD.
+    if input.is_empty() {
+        return Ok(HashMap::new());
     }
-    Ok(entries)
+    let mut log = git(["log", "--no-walk=unsorted", "--stdin", "--format=%H %h %s"]);
+    let out = runner::stdout_with_input(&mut log, input.as_bytes()).map_err(Error::Describe)?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let (commit, rest) = line.split_once(' ')?;
+            let (short, subject) = rest.split_once(' ').unwrap_or((rest, ""));
+            let described = Described {
+                short: short.to_owned(),
+                subject: subject.to_owned(),
+            };
+            Some((commit.to_owned(), described))
+        })
+        .collect())
 }
 
 /// The full id of the commit that `name` names.
@@ -77,31 +126,42 @@ fn resolve(name: &str) -> Result<String, Error> {
     })
 }
 
-/// Whether the chain that ends in `tip` holds `commit`. A commit the clone lacks is held by no
-/// chain of it, and git fails for it as it does for one that the chain does not hold; git that
-/// could not be run at all is a failure, rather than an answer that would have it replayed.
-fn holds(tip: &str, commit: &str) -> Result<bool, Error> {
-    let output =
-        runner::run(&mut git(["merge-base", "--is-ancestor", commit, tip])).map_err(|source| {
-            Error::Holds {
-                tip: tip.to_owned(),
-                commit: commit.to_owned(),
-                source,
-            }
-        })?;
-    Ok(output.status.success())
-}
-
-/// Those of `commits` that the chain that ends in `tip` holds.
+/// Those of `commits` that the chain that ends in `tip` holds, by two git commands for all of
+/// them rather than one for each. Of those the clone has, `git rev-list` lists every commit they
+/// reach without passing through `tip`'s history: a commit that it does not list is one that `tip`
+/// reaches. The walk stops where it meets that history, so its cost is that of the commits apart
+/// from it, not of the whole history. A commit the clone lacks is held by no chain of it.
 fn held<'a>(
     tip: &str,
     commits: impl IntoIterator<Item = &'a String>,
-) -> Result<Vec<String>, Error> {
-    let mut held = Vec::new();
-    for commit in commits {
-        if holds(tip, commit)? {
-            held.push(commit.clone());
-        }
+) -> Result<HashSet<String>, Error> {
+    let error = |source| Error::Holds {
+        tip: tip.to_owned(),
+        source,
+    };
+    let commits: BTreeSet<&str> = commits.into_iter().map(String::as_str).collect();
+    if commits.is_empty() {
+        return Ok(HashSet::new());
     }
-    Ok(held)
+    let input: String = commits.iter().map(|c| format!("{c}\n")).collect();
+    let mut check = git(["cat-file", "--batch-check=%(objectname) %(objecttype)"]);
+    // Each line is `<id> <type>`, or `<id> missing`.
+    let types = runner::stdout_with_input(&mut check, input.as_bytes()).map_err(error)?;
+    let present: Vec<&str> = types
+        .lines()
+        .filter_map(|line| line.strip_suffix(" commit"))
+        .collect();
+    if present.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut revs: String = present.iter().map(|c| format!("{c}\n")).collect();
+    revs.push_str(&format!("^{tip}\n"));
+    let apart = runner::stdout_with_input(&mut git(["rev-list", "--stdin"]), revs.as_bytes())
+        .map_err(error)?;
+    let apart: HashSet<&str> = apart.lines().collect();
+    Ok(present
+        .into_iter()
+        .filter(|c| !apart.contains(c))
+        .map(str::to_owned)
+        .collect())
 }

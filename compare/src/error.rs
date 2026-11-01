@@ -7,10 +7,8 @@ pub enum Error {
     List(#[source] runner::Error),
     #[error("{0}")]
     Index(#[source] replaces_index_store::Error),
-    #[error("could not tell whether {tip} holds {commit}: {source}")]
-    Holds {
-        tip: String,
-        commit: String,
-        source: runner::Error,
-    },
+    #[error("could not tell which commits {tip} holds: {source}")]
+    Holds { tip: String, source: runner::Error },
+    #[error("could not read the subjects of the commits: {0}")]
+    Describe(#[source] runner::Error),
 }

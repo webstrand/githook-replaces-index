@@ -49,10 +49,10 @@ fn tells_what_the_new_chain_holds_of_each_commit() {
     }
     std::env::set_current_dir(dir.path()).unwrap();
     git(&["init", "-q", "-b", "old"]);
-    commit("base");
+    let base = commit("base");
     git(&["branch", "new"]);
     git(&["branch", "elsewhere"]);
-    let [a, b, c, d] = ["a", "b", "c", "d"].map(commit);
+    let [a, b, c, d, f] = ["a", "b", "c", "d", "f"].map(commit);
     git(&["checkout", "-q", "new"]);
     let [a2, b0] = ["a'", "b0"].map(commit);
     git(&["checkout", "-q", "elsewhere"]);
@@ -63,6 +63,10 @@ fn tells_what_the_new_chain_holds_of_each_commit() {
     made(&a, &a2);
     made(&b0, &b);
     made(&c, &c2);
+    // `f` was made from `base`, which both chains hold, and from a commit of another clone, which
+    // this one lacks.
+    made(&base, &f);
+    made(&"e".repeat(40), &f);
 
     let entry = |commit: &String, status| Entry {
         commit: commit.clone(),
@@ -75,6 +79,7 @@ fn tells_what_the_new_chain_holds_of_each_commit() {
             entry(&b, Status::Later(vec![b0.clone()])),
             entry(&c, Status::Rewritten(vec![c2.clone()])),
             entry(&d, Status::Missing),
+            entry(&f, Status::Later(vec![base.clone()])),
         ]
     );
     // The other way round, `new` holds the earlier `b0`, and `a'` is a later version of `a`.
