@@ -88,7 +88,8 @@ fn a_signal_while_an_amend_is_set_aside_abandons_the_amend() {
     ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~"]);
     commit(repo.path(), "upstream");
     ok(repo.path(), &["switch", "-q", "-"]);
-    rebase_keeping(repo.path(), "upstream", "1s/^pick/edit/");
+    // A stop for a break rather than an edit, whose commit the hook would set aside without asking.
+    rebase_keeping(repo.path(), "upstream", "1s/$/\\nbreak/");
     let a1 = ok(repo.path(), &["rev-parse", "HEAD"]);
     let a2 = amend_of(repo.path(), &a1);
     // The hook tells whether the amended commit was there before the rebase with rev-list.

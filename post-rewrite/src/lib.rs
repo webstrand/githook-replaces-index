@@ -4,9 +4,9 @@
 //! During a rebase, git reports each fixup or squash step, and each amend that an `exec` line or
 //! a stopped rebase makes, as an amend of a commit the rebase created itself. Such amends are set
 //! aside instead of recorded, and when the rebase ends, each replacement it reports is followed
-//! through them to the commit that took its place, so that no commit the rebase discarded is
-//! named. An amend whose commit is no longer on the branch, because it was undone, for instance by
-//! a `git reset` back to the amended commit, is not followed. They are set aside in the rebase's
+//! through them to the last commit that took its place and is still on the branch, so that no
+//! commit the rebase discarded is named. An amend whose commit is no longer on the branch, because
+//! it was undone, for instance by a `git reset` back to the amended commit, is not followed. They are set aside in the rebase's
 //! state directory, which git removes when the rebase ends or is aborted. `git am` keeps its
 //! state in rebase-apply/ as well, but marks it with `applying` rather than `rebasing`, and runs
 //! no post-rewrite when it ends, so an amend while it is stopped is recorded at once.
@@ -14,7 +14,11 @@
 //! An amend during a rebase of a commit that was there before the rebase began, such as one that a
 //! pick kept as it was or the commit the rebase is onto, is recorded at once as well: the rebase
 //! does not report such a commit as rewritten, so nothing would lead to the amend, and a rebase
-//! that rewrites nothing else runs no post-rewrite when it ends.
+//! that rewrites nothing else runs no post-rewrite when it ends. The exception is the commit that
+//! the rebase stopped at for an `edit`, which it names in `amend` in its state directory: the
+//! rebase reports it as replaced by the commit it finds when it goes on, kept pick or not, so its
+//! amends are set aside as well. An amend of a commit that an amend recorded at once made is
+//! recorded at once in turn, since nothing the rebase reports leads to it either.
 
 mod error;
 
@@ -128,8 +132,29 @@ fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
     match kind {
         Kind::Amend => {
             let mut aside = Vec::new();
+            let edited = edited(&state).unwrap_or_else(|err| {
+                warn(err, "an amend at a stop for an edit is recorded at once");
+                String::new()
+            });
+            // The commits that amends recorded at once made: nothing that the rebase reports
+            // leads to them either, so their own amends are recorded at once as well, at the cost
+            // of naming the commit between.
+            let made_at_once: HashSet<String> = match Amends::read(&state.join(AT_ONCE)) {
+                Ok(amends) => amends.made.into_iter().map(|(_, new)| new).collect(),
+                Err(err) => {
+                    warn(err, "an amend of a commit it names is set aside");
+                    HashSet::new()
+                }
+            };
             for replacement in mem::take(&mut rewrite.replacements) {
-                match before_rebase(&state, &replacement.0) {
+                let before = if replacement.0 == edited {
+                    Ok(false)
+                } else if made_at_once.contains(&replacement.0) {
+                    Ok(true)
+                } else {
+                    before_rebase(&state, &replacement.0)
+                };
+                match before {
                     Ok(true) => rewrite.replacements.push(replacement),
                     Ok(false) => aside.push(replacement),
                     Err(err) => {
@@ -141,6 +166,9 @@ fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
             if let Err(err) = set_aside(&state.join(AMENDED), &aside) {
                 warn(err, "the amend is recorded at once");
                 rewrite.replacements.extend(aside);
+            }
+            if let Err(err) = set_aside(&state.join(AT_ONCE), &rewrite.replacements) {
+                warn(err, "a later amend of the commit it made is set aside");
             }
         }
         Kind::Rebase => {
@@ -178,6 +206,9 @@ fn tell(message: impl std::fmt::Display) {
 
 /// The file of the rebase's state directory in which the hook sets amends aside.
 const AMENDED: &str = "replaces-index-amended";
+
+/// The file of the rebase's state directory in which the hook keeps the amends it recorded at once.
+const AT_ONCE: &str = "replaces-index-at-once";
 
 /// The state directory of the rebase in progress, if any.
 fn rebase_state() -> Result<Option<PathBuf>, Error> {
@@ -219,6 +250,17 @@ fn before_rebase(state: &Path, commit: &str) -> Result<bool, Error> {
     args.extend(ids.iter().map(|id| id.trim()));
     let newer = runner::stdout(&mut runner::git(args)).map_err(Error::BeforeRebase)?;
     Ok(newer.trim().is_empty())
+}
+
+/// The commit that the rebase whose state is in `state` stopped at for an `edit`, which it reports
+/// as replaced by the commit it finds when it goes on; empty when it did not stop for one.
+fn edited(state: &Path) -> Result<String, Error> {
+    let path = state.join("amend");
+    match fs::read_to_string(&path) {
+        Ok(id) => Ok(id.trim().to_owned()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(source) => Err(Error::ReadState { path, source }),
+    }
 }
 
 /// Whether `commit` is HEAD or one of its ancestors.
@@ -293,21 +335,30 @@ impl Amends {
         Ok(followed)
     }
 
-    /// The commit that finally took the place of `commit`, following the amends whose commit
-    /// `kept` accepts.
+    /// The commit that finally took the place of `commit`: the last of the chain of amends from it
+    /// that `kept` accepts, or `commit` when it accepts none. The commits between were replaced by
+    /// a later amend, and are on the branch no more than an undone amend, so only the end of the
+    /// chain tells whether it was undone.
     fn last<'a>(
         &'a self,
-        mut commit: &'a str,
+        commit: &'a str,
         mut kept: impl FnMut(&str) -> Result<bool, Error>,
     ) -> Result<&'a str, Error> {
-        let mut visited = HashSet::new();
-        while let Some(next) = self.last.get(commit) {
-            // An amend that made the commit again is checked first, which spares asking git
-            // whether it is kept; the visited commits end any longer cycle.
-            if next == commit || !visited.insert(commit) || !kept(next)? {
+        let mut chain = vec![commit];
+        // The visited commits end a cycle, as an amend that made a commit again forms.
+        let mut visited = HashSet::from([commit]);
+        let mut at = commit;
+        while let Some(next) = self.last.get(at) {
+            if !visited.insert(next.as_str()) {
                 break;
             }
-            commit = next;
+            chain.push(next);
+            at = next;
+        }
+        for &amended in chain[1..].iter().rev() {
+            if kept(amended)? {
+                return Ok(amended);
+            }
         }
         Ok(commit)
     }
