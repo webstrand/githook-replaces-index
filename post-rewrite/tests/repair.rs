@@ -5,7 +5,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{amend_of, amended, commit, hook, note, ok, repo};
+use common::{amend_of, amended, commit, git, hook, note, ok, ok_command, repo};
 
 /// Runs the hook on the amend `old` to `new`, which must succeed, and returns its standard error.
 fn amend(repo: &Path, old: &str, new: &str) -> String {
@@ -141,4 +141,33 @@ fn a_note_that_git_notes_add_overwrote_is_put_back() {
     assert_eq!(stderr.contains("put back"), overwrote, "{stderr}");
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
     assert_eq!(note(repo.path(), &x2), [format!("replaces: {x}")]);
+}
+
+#[test]
+fn notes_moved_to_another_fanout_are_left_alone() {
+    let (repo, a, a2) = amended();
+    let repo = repo.path();
+    amend(repo, &a, &a2);
+    // Moves the note one level of fanout down, as a writer does to every note once their number
+    // reaches 256, which git diff-tree shows as a note removed and another added.
+    let last = ok(repo, &["rev-parse", "refs/notes/replaces"]);
+    let blob = ok(repo, &["rev-parse", &format!("{last}:{a2}")]);
+    let index = repo.join(".git/moved-index");
+    let with_index = |args: &[&str]| {
+        let mut command = git(repo, args);
+        command.env("GIT_INDEX_FILE", &index);
+        ok_command(command)
+    };
+    with_index(&["read-tree", "--empty"]);
+    let nested = format!("100644,{blob},{}/{}", &a2[..2], &a2[2..]);
+    with_index(&["update-index", "--add", "--cacheinfo", &nested]);
+    let tree = with_index(&["write-tree"]);
+    let moved = ok(repo, &["commit-tree", &tree, "-p", &last, "-m", "fanout"]);
+    ok(repo, &["update-ref", "refs/notes/replaces", &moved, &last]);
+
+    let b = commit(repo, "b");
+    let b2 = amend_of(repo, &b);
+    let stderr = amend(repo, &b, &b2);
+    assert!(!stderr.contains("put back"), "{stderr}");
+    assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
 }

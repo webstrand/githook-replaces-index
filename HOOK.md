@@ -103,7 +103,7 @@ After each write, the hook, `replaces-index-record` and `git pull-replaces` chec
 replaces-index: a writer dropped lines from refs/notes/replaces when it moved it from <commit> to <commit>; they are put back
 ```
 
-The commit up to which the reflog was checked is kept in `replaces-checked` in the common git directory, so that each step is checked once; a run checks the step of its own write, and any of other writers since. A note removed with `git notes remove` is put back as well. A clone that keeps no reflog of the notes ref, as a bare clone does unless `core.logAllRefUpdates` says otherwise, is not checked, and neither is a step that the reflog no longer holds once it expired.
+The commit up to which the reflog was checked is kept in `replaces-checked` in the common git directory, so that each step is checked once; a run checks the step of its own write, and any of other writers since. A note removed with `git notes remove` is put back as well. A note that a step moved to another fanout, as a writer moves every note once their number crosses a power of 256, is compared with itself by the commit it annotates, and was not dropped. A clone that keeps no reflog of the notes ref, as a bare clone does unless `core.logAllRefUpdates` says otherwise, is not checked, and neither is a step that the reflog no longer holds once it expired.
 
 ## Index
 

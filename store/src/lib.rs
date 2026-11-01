@@ -278,19 +278,29 @@ fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Er
         to,
     ]))
     .map_err(Error::Notes)?;
+    // A note that moved to another fanout shows as removed at one path and added at another, and
+    // was removed only if it was added nowhere.
     let mut fields = diff.split('\0').filter(|field| !field.is_empty());
     let mut changed = Vec::new();
+    let mut removed = BTreeSet::new();
     while let (Some(header), Some(path)) = (fields.next(), fields.next()) {
         let words: Vec<&str> = header.split(' ').collect();
         let (Some(blob), Some(status)) = (words.get(3), words.get(4)) else {
             return Ok(None);
         };
-        if !matches!(*status, "A" | "M") {
-            return Ok(None);
+        let commit = path.replace('/', "");
+        match *status {
+            "A" | "M" => changed.push((commit, (*blob).to_owned())),
+            "D" => {
+                removed.insert(commit);
+            }
+            _ => return Ok(None),
         }
-        changed.push((path.replace('/', ""), (*blob).to_owned()));
     }
-    Ok(Some(changed))
+    for (commit, _) in &changed {
+        removed.remove(commit);
+    }
+    Ok(removed.is_empty().then_some(changed))
 }
 
 /// Every note of the notes commit `notes`, as pairs of the commit annotated and the note's blob.

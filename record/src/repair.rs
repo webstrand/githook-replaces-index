@@ -7,6 +7,7 @@
 //! directory, so that each step is checked once. A clone that keeps no reflog of the notes ref,
 //! as a bare one by default, is not checked.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -90,18 +91,34 @@ fn drops_lines(before: &str, after: &str) -> Result<bool, Error> {
         after,
     ]))
     .map_err(Error::Read)?;
-    // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each file that changed.
+    // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each file that changed. A note that
+    // moved to another fanout, as every note does once their number crosses a power of 256, shows
+    // as removed at one path and added at another, and is compared by the commit it annotates.
     let mut fields = out.split('\0');
     let mut pairs = Vec::new();
-    while let (Some(meta), Some(_path)) = (fields.next(), fields.next()) {
+    let mut removed = BTreeMap::new();
+    let mut added = BTreeMap::new();
+    while let (Some(meta), Some(path)) = (fields.next(), fields.next()) {
         let words: Vec<&str> = meta.split(' ').collect();
         let [_, _, old, new, status] = words[..] else {
             continue;
         };
+        let commit = path.replace('/', "");
         match status {
-            "D" => return Ok(true),
+            "D" => {
+                removed.insert(commit, old);
+            }
+            "A" => {
+                added.insert(commit, new);
+            }
             "M" => pairs.push((old, new)),
             _ => {}
+        }
+    }
+    for (commit, old) in removed {
+        match added.get(&commit) {
+            Some(&new) => pairs.push((old, new)),
+            None => return Ok(true),
         }
     }
     let blobs: Vec<&str> = pairs.iter().flat_map(|(old, new)| [*old, *new]).collect();
