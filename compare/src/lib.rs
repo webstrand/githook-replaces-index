@@ -41,12 +41,12 @@ pub fn compare(old: &str, new: &str) -> Result<Vec<Entry>, Error> {
     let mut entries = Vec::new();
     for commit in commits.lines() {
         let into = index.replaced_by(commit).map_err(Error::Index)?;
-        let held: Vec<String> = into.iter().filter(|c| holds(&new, c)).cloned().collect();
-        let status = if !held.is_empty() {
-            Status::Held(held)
+        let held_into = held(&new, &into)?;
+        let status = if !held_into.is_empty() {
+            Status::Held(held_into)
         } else {
             let from = index.replaces(commit).map_err(Error::Index)?;
-            let earlier: Vec<String> = from.into_iter().filter(|c| holds(&new, c)).collect();
+            let earlier = held(&new, &from)?;
             if !earlier.is_empty() {
                 Status::Later(earlier)
             } else if !into.is_empty() {
@@ -78,8 +78,30 @@ fn resolve(name: &str) -> Result<String, Error> {
 }
 
 /// Whether the chain that ends in `tip` holds `commit`. A commit the clone lacks is held by no
-/// chain of it.
-fn holds(tip: &str, commit: &str) -> bool {
-    runner::run(&mut git(["merge-base", "--is-ancestor", commit, tip]))
-        .is_ok_and(|output| output.status.success())
+/// chain of it, and git fails for it as it does for one that the chain does not hold; git that
+/// could not be run at all is a failure, rather than an answer that would have it replayed.
+fn holds(tip: &str, commit: &str) -> Result<bool, Error> {
+    let output =
+        runner::run(&mut git(["merge-base", "--is-ancestor", commit, tip])).map_err(|source| {
+            Error::Holds {
+                tip: tip.to_owned(),
+                commit: commit.to_owned(),
+                source,
+            }
+        })?;
+    Ok(output.status.success())
+}
+
+/// Those of `commits` that the chain that ends in `tip` holds.
+fn held<'a>(
+    tip: &str,
+    commits: impl IntoIterator<Item = &'a String>,
+) -> Result<Vec<String>, Error> {
+    let mut held = Vec::new();
+    for commit in commits {
+        if holds(tip, commit)? {
+            held.push(commit.clone());
+        }
+    }
+    Ok(held)
 }
