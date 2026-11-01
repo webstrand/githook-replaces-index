@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::hash::{BuildHasher, RandomState};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use runner::git;
@@ -92,12 +92,68 @@ pub fn record(rewrite: &Rewrite) -> Result<(), Error> {
 /// A writer retries for as long as other writers move the ref or hold its lock; `progress` tells
 /// how it fares, and a process that must end sooner ends it.
 pub fn record_then(rewrite: &Rewrite, written: impl FnOnce()) -> Result<(), Error> {
+    // An abbreviated id would be written into the notes as it is, where no query matches it.
+    let ids = rewrite
+        .replacements
+        .iter()
+        .flat_map(|(old, new)| [old, new]);
+    if let Some(id) = ids.into_iter().find(|id| !is_id(id)) {
+        return Err(Error::NotAnId(id.clone()));
+    }
     if rewrite.replacements.is_empty() {
         *progress_mut() = Progress::default();
         written();
         return Ok(());
     }
+    // fast-import writes the note of a commit only if the clone has it, and fails otherwise, which
+    // no retry would change.
+    let news: BTreeSet<&str> = rewrite
+        .replacements
+        .iter()
+        .map(|(_, new)| new.as_str())
+        .collect();
+    if let Some(missing) = not_commits(&news)?.into_iter().next() {
+        return Err(Error::NotInClone(missing));
+    }
     write(Change::Rewrite(rewrite), written)
+}
+
+/// Those of `ids` that name no commit of the clone, by one `git cat-file`.
+fn not_commits(ids: &BTreeSet<&str>) -> Result<Vec<String>, Error> {
+    let input: String = ids.iter().map(|id| format!("{id}\n")).collect();
+    let mut check = git(["cat-file", "--batch-check=%(objectname) %(objecttype)"]);
+    let out = runner::stdout_with_input(&mut check, input.as_bytes()).map_err(Error::Read)?;
+    // Each line is `<id> <type>`, or `<id> missing`.
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(_, kind)| *kind != "commit")
+        .map(|(id, _)| id.to_owned())
+        .collect())
+}
+
+/// Whether `word` is the full id of an object of this repository, as git writes it: lowercase hex
+/// digits, 40 of them in a SHA-1 repository and 64 in a SHA-256 one. Another form names the same
+/// object to git, but no query matches it, since the notes hold ids as git writes them.
+pub(crate) fn is_id(word: &str) -> bool {
+    let length_fits = match id_length() {
+        Some(length) => word.len() == length,
+        None => matches!(word.len(), 40 | 64),
+    };
+    length_fits && word.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The length of the ids of this repository's objects, once found; none when git cannot tell.
+fn id_length() -> Option<usize> {
+    static LENGTH: OnceLock<Option<usize>> = OnceLock::new();
+    *LENGTH.get_or_init(|| {
+        let format = runner::stdout(&mut git(["rev-parse", "--show-object-format"])).ok()?;
+        match format.trim() {
+            "sha1" => Some(40),
+            "sha256" => Some(64),
+            _ => None,
+        }
+    })
 }
 
 /// Merges the notes of the notes commit `theirs` into the ref, as `record` records a rewrite: the

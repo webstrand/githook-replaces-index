@@ -265,3 +265,89 @@ fn reads_a_note_under_one_level_of_fanout() {
 fn reads_a_note_under_two_levels_of_fanout() {
     inherits_through_fanout(|id| format!("{}/{}/{}", &id[..2], &id[2..4], &id[4..]));
 }
+
+/// Runs `record` with `input`, whatever its outcome.
+fn run_record(repo: &Path, input: &str) -> std::process::Output {
+    let mut child = isolated(repo, RECORD, &[])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn refuses_what_is_not_a_full_id() {
+    let (dir, ids) = repo(["a", "b"]);
+    let (repo, [a, b]) = (dir.path(), ids.each_ref());
+    let inputs = [
+        "a b\n".to_owned(),
+        format!("{} {}\n", &a[..7], &b[..7]),
+        format!("{} {}\n", a.to_uppercase(), b.to_uppercase()),
+        // An id of the length of SHA-256, in a SHA-1 repository.
+        format!("{a}{} {b}\n", "0".repeat(24)),
+    ];
+    for input in inputs {
+        let output = run_record(repo, &input);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("is not the full id of a commit"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+    assert_eq!(git(repo, &["rev-parse", "-q", "--verify", REF]), None);
+}
+
+#[test]
+fn refuses_a_new_commit_the_clone_lacks_without_retrying() {
+    let (dir, ids) = repo(["a"]);
+    let (repo, [a]) = (dir.path(), ids.each_ref());
+    let missing = "f".repeat(40);
+    let output = run_record(repo, &format!("{a} {missing}\n"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{missing} is not a commit of this clone")),
+        "{stderr}"
+    );
+    let crashes = std::fs::read_dir(repo.join(".git"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("fast_import_crash")
+        })
+        .count();
+    assert_eq!(crashes, 0);
+}
+
+#[test]
+fn records_in_a_sha256_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "--object-format=sha256"]).unwrap();
+    git(repo, &["commit", "-q", "--allow-empty", "-m", "a"]).unwrap();
+    let a = git(repo, &["rev-parse", "HEAD"]).unwrap().trim().to_owned();
+    git(
+        repo,
+        &["commit", "-q", "--amend", "--allow-empty", "-m", "b"],
+    )
+    .unwrap();
+    let b = git(repo, &["rev-parse", "HEAD"]).unwrap().trim().to_owned();
+    record(repo, &format!("{a} {b}\n"));
+    assert_eq!(note(repo, &b), Some(replaces(&[&a])));
+    // An id of the length of SHA-1 is no full id in a SHA-256 repository.
+    let output = run_record(repo, &format!("{} {b}\n", &a[..40]));
+    assert!(!output.status.success());
+}

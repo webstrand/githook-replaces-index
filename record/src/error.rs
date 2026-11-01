@@ -13,6 +13,10 @@ pub enum Error {
     Write(#[source] runner::Error),
     #[error("{REF} points to {0}, which is not a commit")]
     NotACommit(String),
+    #[error("{0} is not the full id of a commit, in lowercase, as git writes it")]
+    NotAnId(String),
+    #[error("{0} is not a commit of this clone, so no note can be written for it")]
+    NotInClone(String),
     #[error("could not read or write {path}: {source}")]
     Checked {
         path: std::path::PathBuf,

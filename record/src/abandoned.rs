@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{Error, Rewrite};
+use crate::{Error, Rewrite, is_id};
 
 /// The directory of the common git directory that holds the abandoned rewrites.
 pub const DIR: &str = "replaces-abandoned";
@@ -163,11 +163,6 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
         kept
     });
     Ok(waiting)
-}
-
-/// Whether `word` is the full id of an object.
-fn is_id(word: &str) -> bool {
-    matches!(word.len(), 40 | 64) && word.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Those of `ids` that name no commit of the repository.
