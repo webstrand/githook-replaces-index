@@ -266,3 +266,27 @@ fn says_what_it_waits_for() {
     );
     assert_eq!(note(ours, &b), format!("replaces: {a}\nreplaces: {x}\n"));
 }
+
+/// The path of the note of `commit` under one level of fanout.
+fn nested(commit: &str) -> String {
+    format!("{}/{}", &commit[..2], &commit[2..])
+}
+
+#[test]
+fn writes_a_note_it_lacked_at_the_fanout_of_its_own_notes() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    let (a, b, c, d) = (id('a'), id('b'), id('c'), id('d'));
+    note_add(theirs, &d, &format!("replaces: {c}\n"));
+    note_add(ours, &nested(&b), &format!("replaces: {a}\n"));
+
+    let (ok, _, stderr) = run(ours, PULL, &["origin"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        git(ours, &["ls-tree", "-r", "--name-only", REF]),
+        format!("{}\n{}\n", nested(&b), nested(&d))
+    );
+}

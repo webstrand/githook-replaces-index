@@ -220,6 +220,11 @@ fn says_what_it_waits_for() {
 /// Makes the notes ref a commit whose tree holds only a note of `lines` at `path`, as git stores a
 /// note when its tree has a fanout.
 fn note_at(repo: &Path, path: &str, lines: &str) {
+    notes_at(repo, &[(path, lines)]);
+}
+
+/// Makes the notes ref a commit whose tree holds only `notes`, each of its lines at its path.
+fn notes_at(repo: &Path, notes: &[(&str, &str)]) {
     let index = repo.join(".git/note-index");
     let with_index = |args: &[&str], input: Option<&str>| -> String {
         let mut command = isolated(repo, "git", args);
@@ -238,10 +243,12 @@ fn note_at(repo: &Path, path: &str, lines: &str) {
         assert!(output.status.success(), "{args:?}");
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     };
-    let blob = with_index(&["hash-object", "-w", "--stdin"], Some(lines));
     with_index(&["read-tree", "--empty"], None);
-    let info = format!("100644,{blob},{path}");
-    with_index(&["update-index", "--add", "--cacheinfo", &info], None);
+    for (path, lines) in notes {
+        let blob = with_index(&["hash-object", "-w", "--stdin"], Some(lines));
+        let info = format!("100644,{blob},{path}");
+        with_index(&["update-index", "--add", "--cacheinfo", &info], None);
+    }
     let tree = with_index(&["write-tree"], None);
     let commit = with_index(&["commit-tree", &tree, "-m", "notes"], None);
     git(repo, &["update-ref", REF, &commit]).unwrap();
@@ -304,6 +311,30 @@ fn refuses_what_is_not_a_full_id() {
         assert!(!stderr.contains("panicked"), "{stderr}");
     }
     assert_eq!(git(repo, &["rev-parse", "-q", "--verify", REF]), None);
+}
+
+#[test]
+fn rewrites_a_note_at_the_path_it_was_found_at() {
+    // `git notes`, as when notes.rewriteRef copies a note, may give a tree a fanout that its number
+    // of notes would not give it in fast-import, which then writes the note at another path.
+    let (dir, ids) = repo(["a", "b", "c", "x"]);
+    let (repo, [a, b, c, x]) = (dir.path(), ids.each_ref());
+    let nested = format!("{}/{}", &c[..2], &c[2..]);
+    notes_at(
+        repo,
+        &[
+            (b, &format!("replaces: {a}\n")),
+            (&nested, &format!("replaces: {x}\n")),
+        ],
+    );
+    record(repo, &format!("{b} {c}\n"));
+    let files = git(repo, &["ls-tree", "-r", "--name-only", REF]).unwrap();
+    let of_c = files
+        .lines()
+        .filter(|path| path.replace('/', "") == *c)
+        .count();
+    assert_eq!(of_c, 1, "{files}");
+    assert_eq!(note(repo, c), Some(replaces(&[a, b, x])));
 }
 
 #[test]

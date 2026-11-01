@@ -274,11 +274,11 @@ fn attempt(change: Change, ident: &mut Option<String>) -> Result<Attempt, Error>
                 .iter()
                 .flat_map(|(old, new)| [old.as_str(), new.as_str()])
                 .collect();
-            let current = match &parent {
+            let (current, found) = match &parent {
                 Some(parent) => read(parent, &involved)?,
-                None => Notes::new(),
+                None => (Notes::new(), Paths::new()),
             };
-            (Changed::ByCommit(notes_of(&current, rewrite)), None)
+            (Changed::ByCommit(notes_of(&current, rewrite), found), None)
         }
         Change::Merge(theirs) => match parent.as_deref() {
             None => return move_ref(theirs, None),
@@ -355,36 +355,45 @@ fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// The notes that a writer writes: by the commit they annotate, which the clone has, or by their
-/// path in the notes tree, for the notes of another clone, which annotate commits the clone may
-/// lack.
+/// The notes that a writer writes: by the commit they annotate, which the clone has, with the
+/// paths each is found at now, or by their path in the notes tree, for the notes of another clone,
+/// which annotate commits the clone may lack.
 enum Changed {
-    ByCommit(Notes),
+    ByCommit(Notes, Paths),
     ByPath(Notes),
 }
 
 impl Changed {
     fn is_empty(&self) -> bool {
         match self {
-            Self::ByCommit(notes) | Self::ByPath(notes) => notes.is_empty(),
+            Self::ByCommit(notes, _) | Self::ByPath(notes) => notes.is_empty(),
         }
     }
 }
 
 /// The notes of the notes commit `ours` that the union with those of `theirs` changes, by their
-/// path in the tree of `ours`, or of `theirs` for a note that `ours` lacks.
+/// path in the tree of `ours`. A note that `ours` lacks goes at the fanout of the notes of `ours`
+/// rather than at its path in `theirs`, whose fanout may differ, so that the tree keeps one.
 fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
     let our_files = note_files(ours)?;
     let their_files = note_files(theirs)?;
+    let mut depths = [0usize; FANOUT + 1];
+    for file in our_files.values() {
+        depths[file.path.matches('/').count().min(FANOUT)] += 1;
+    }
+    // The depth that most notes of ours are at, if ours has any.
+    let depth = (0..=FANOUT)
+        .filter(|&d| depths[d] > 0)
+        .max_by_key(|&d| depths[d]);
     // Each note of theirs that differs from ours, with ours if any.
-    let differing: Vec<(Option<&NoteFile>, &NoteFile)> = their_files
+    let differing: Vec<(&str, Option<&NoteFile>, &NoteFile)> = their_files
         .iter()
-        .map(|(commit, theirs)| (our_files.get(commit), theirs))
-        .filter(|(ours, theirs)| ours.is_none_or(|ours| ours.blob != theirs.blob))
+        .map(|(commit, theirs)| (commit.as_str(), our_files.get(commit), theirs))
+        .filter(|(_, ours, theirs)| ours.is_none_or(|ours| ours.blob != theirs.blob))
         .collect();
     let blobs: Vec<&str> = differing
         .iter()
-        .flat_map(|(ours, theirs)| ours.iter().chain([theirs]).map(|file| file.blob.as_str()))
+        .flat_map(|(_, ours, theirs)| ours.iter().chain([theirs]).map(|file| file.blob.as_str()))
         .collect();
     // The contents of the blobs, in the order of `blobs`.
     let mut contents = runner::cat_file(&blobs).map_err(Error::Read)?.into_iter();
@@ -396,15 +405,19 @@ fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
             .collect()
     };
     let mut changed = Notes::new();
-    for (ours, theirs) in differing {
+    for (commit, ours, theirs) in differing {
         let mut note = match ours {
             Some(_) => next_lines(),
             None => BTreeSet::new(),
         };
         let before = note.len();
         note.extend(next_lines());
+        let path = match (ours, depth) {
+            (Some(ours), _) => ours.path.clone(),
+            (None, Some(depth)) => note_path(commit, depth),
+            (None, None) => theirs.path.clone(),
+        };
         if ours.is_none() || note.len() != before {
-            let path = ours.unwrap_or(theirs).path.clone();
             changed.insert(path, note);
         }
     }
@@ -418,7 +431,8 @@ struct NoteFile {
     blob: String,
 }
 
-/// The notes of the notes commit `notes`, by the commit they annotate.
+/// The notes of the notes commit `notes`, by the commit they annotate. A file whose path does not
+/// spell a commit id is not a note.
 fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
     let out = runner::stdout(&mut git(["ls-tree", "-r", "-z", notes])).map_err(Error::Read)?;
     // `<mode> blob <blob>\t<path>` for each file.
@@ -428,6 +442,9 @@ fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
             let (meta, path) = entry.split_once('\t')?;
             let blob = meta.strip_prefix("100644 blob ")?;
             let commit: String = path.chars().filter(|&c| c != '/').collect();
+            if !is_id(&commit) {
+                return None;
+            }
             let file = NoteFile {
                 path: path.to_owned(),
                 blob: blob.to_owned(),
@@ -476,36 +493,49 @@ fn notes_commit() -> Result<Option<String>, Error> {
 /// off the path of a note, and git adds one for every factor of 256 in the number of notes.
 const FANOUT: usize = 3;
 
-/// The notes of the commits `wanted` in the notes commit `notes`, those that have one. Each is
-/// looked for at each depth of fanout, by one `git cat-file`, rather than by listing every note.
-fn read(notes: &str, wanted: &BTreeSet<&str>) -> Result<Notes, Error> {
-    let mut specs = Vec::new();
-    for commit in wanted {
-        for depth in 0..=FANOUT.min(commit.len() / 2 - 1) {
-            let (dirs, rest) = commit.split_at(2 * depth);
-            let mut path = String::new();
-            for pair in dirs.as_bytes().chunks(2) {
-                path.push_str(std::str::from_utf8(pair).unwrap_or_default());
-                path.push('/');
-            }
-            path.push_str(rest);
-            specs.push((*commit, format!("{notes}:{path}")));
-        }
-    }
-    let names: Vec<&str> = specs.iter().map(|(_, spec)| spec.as_str()).collect();
+/// The paths in the notes tree at which the note of each commit was found.
+type Paths = BTreeMap<String, Vec<String>>;
+
+/// The notes of the commits `wanted` in the notes commit `notes`, those that have one, and the
+/// paths they were found at. Each is looked for at each depth of fanout, by one `git cat-file`,
+/// rather than by listing every note. A note found at more than one depth holds the lines of all.
+fn read(notes: &str, wanted: &BTreeSet<&str>) -> Result<(Notes, Paths), Error> {
+    let specs: Vec<(&str, String)> = wanted
+        .iter()
+        .flat_map(|commit| (0..=FANOUT).map(move |depth| (*commit, note_path(commit, depth))))
+        .collect();
+    let names: Vec<String> = specs
+        .iter()
+        .map(|(_, path)| format!("{notes}:{path}"))
+        .collect();
     let contents = runner::cat_file(&names).map_err(Error::Read)?;
     let mut found = Notes::new();
-    for ((commit, _), text) in specs.iter().zip(contents) {
+    let mut paths = Paths::new();
+    for ((commit, path), text) in specs.into_iter().zip(contents) {
         let Some(text) = text else {
             continue;
         };
         let text = String::from_utf8_lossy(&text);
         found
-            .entry((*commit).to_owned())
+            .entry(commit.to_owned())
             .or_default()
             .extend(text.lines().map(str::to_owned));
+        paths.entry(commit.to_owned()).or_default().push(path);
     }
-    Ok(found)
+    Ok((found, paths))
+}
+
+/// The path of the note of `commit`, a full id, in a notes tree of fanout `depth`: each of its
+/// first `depth` pairs of hex digits names a directory.
+fn note_path(commit: &str, depth: usize) -> String {
+    let (dirs, rest) = commit.split_at(2 * depth);
+    let mut path = String::new();
+    for pair in dirs.as_bytes().chunks(2) {
+        path.push_str(std::str::from_utf8(pair).unwrap_or_default());
+        path.push('/');
+    }
+    path.push_str(rest);
+    path
 }
 
 /// The notes that `rewrite` changes, given the `current` notes of the commits it involves, each
@@ -544,6 +574,11 @@ fn notes_of(current: &Notes, rewrite: &Rewrite) -> Notes {
 /// merges `theirs`, if given. Notes by commit are written with `N`, which leaves the fanout of the
 /// notes tree to fast-import; every commit they annotate is one that a rewrite in this clone
 /// created, which the clone therefore has. Notes by path are written as files at that path.
+///
+/// `N` replaces a note only at the fanout that fast-import derives from the number of notes, while
+/// `git notes` chooses the fanout of the trees it writes otherwise, and a merge may have left a
+/// note at another. Each note written by commit is therefore removed first from every path it was
+/// found at, so that the tree never holds two files for one commit.
 fn stream(ident: &str, parent: Option<&str>, theirs: Option<&str>, notes: &Changed) -> String {
     let message = if theirs.is_some() {
         "replaces-index: merge\n"
@@ -564,8 +599,11 @@ fn stream(ident: &str, parent: Option<&str>, theirs: Option<&str>, notes: &Chang
         lines.iter().map(|line| format!("{line}\n")).collect()
     };
     match notes {
-        Changed::ByCommit(notes) => {
+        Changed::ByCommit(notes, found) => {
             for (commit, lines) in notes {
+                for path in found.get(commit).into_iter().flatten() {
+                    let _ = writeln!(stream, "D {path}");
+                }
                 let text = text(lines);
                 let _ = write!(stream, "N inline {commit}\ndata {}\n{text}\n", text.len());
             }
