@@ -3,8 +3,9 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use replaces_index_pull::{Pulled, pull};
-use replaces_index_record::{REF, heartbeat};
+use replaces_index_pull::{Notice, Pulled, pull};
+use replaces_index_record::heartbeat;
+use replaces_index_record::notice::say;
 
 #[derive(Parser)]
 #[command(name = "git pull-replaces", about)]
@@ -23,7 +24,7 @@ fn main() -> ExitCode {
     match pulled {
         Ok(Pulled::Merged) => ExitCode::SUCCESS,
         Ok(Pulled::Absent) => {
-            eprintln!("pull-replaces: {} has no {REF}", cli.remote);
+            say("pull-replaces", &Notice::Absent(cli.remote));
             ExitCode::SUCCESS
         }
         Err(err) => {

@@ -19,6 +19,13 @@ use runner::git;
 
 pub use crate::error::Error;
 
+/// What a pull says besides its failures, after `pull-replaces:`.
+#[derive(Debug, thiserror::Error)]
+pub enum Notice {
+    #[error("{0} has no {REF}")]
+    Absent(String),
+}
+
 /// What a pull found at the remote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pulled {

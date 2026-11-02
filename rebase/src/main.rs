@@ -24,6 +24,7 @@
 //! the branch shared with it, rather than onto the upstream.
 
 mod error;
+mod notice;
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -34,10 +35,12 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use replaces_index_compare::{Described, Status, compare, describe};
-use replaces_index_pull::{Pulled, fetch_and_pull};
+use replaces_index_pull::{Notice as PullNotice, Pulled, fetch_and_pull};
+use replaces_index_record::notice::say;
 use runner::git;
 
 use crate::error::Error;
+use crate::notice::{Notice, Why};
 
 #[derive(Parser)]
 #[command(name = "git rebase-replaces", about)]
@@ -96,7 +99,7 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
             source,
         })?;
         if pulled == Pulled::Absent {
-            eprintln!("pull-replaces: {remote} has no refs/notes/replaces");
+            say("pull-replaces", &PullNotice::Absent(remote.to_owned()));
         }
     }
     let up = runner::stdout(&mut git([
@@ -115,7 +118,7 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
     };
     let local = compare("HEAD", &up).map_err(Error::Compare)?;
     // Each commit left out, with why.
-    let mut drop: Vec<(&str, String)> = Vec::new();
+    let mut drop: Vec<(&str, Why)> = Vec::new();
     // The commit of the upstream that replaces a commit left out, when a single one does.
     let mut replacements: HashMap<&str, &str> = HashMap::new();
     // Every commit of the upstream that replaces a commit left out.
@@ -127,7 +130,9 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
         match &entry.status {
             _ if held.contains(commit) => drop.push((
                 commit,
-                format!("the reflog of {upstream} shows that it held it"),
+                Why::Reflog {
+                    upstream: upstream.to_owned(),
+                },
             )),
             Status::Held(into) => {
                 if let [replacement] = &into[..] {
@@ -136,7 +141,10 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
                 replacing.extend(into.iter().map(String::as_str));
                 drop.push((
                     commit,
-                    format!("{upstream} holds {} made from it", shorts(into)),
+                    Why::Held {
+                        upstream: upstream.to_owned(),
+                        into: shorts(into),
+                    },
                 ));
             }
             Status::Rewritten(into) => replayed.push((commit, into)),
@@ -154,30 +162,38 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
             .map_or(commit.to_owned(), |d| format!("{} {}", d.short, d.subject))
     };
     for (commit, into) in &replayed {
-        eprintln!(
-            "rebase-replaces: {} was rewritten as {} but {upstream} lacks it; replaying it",
-            describe(commit),
-            shorts(into)
-        );
+        let notice = Notice::Lacked {
+            commit: describe(commit),
+            into: shorts(into),
+            upstream: upstream.to_owned(),
+        };
+        say("rebase-replaces", &notice);
     }
     for (commit, why) in &drop {
-        println!("rebase-replaces: leaving out {}: {why}", describe(commit));
+        let notice = Notice::LeavingOut {
+            commit: describe(commit),
+            why: why.to_string(),
+        };
+        println!("rebase-replaces: {notice}");
     }
     let onto = if keep_base {
         let onto = kept_base(&up, &replacing, upstream)?;
         let shown = describe(&onto);
-        println!(
-            "rebase-replaces: replaying {} commits onto {shown}, keeping the base, leaving out {} {upstream} already holds",
-            local.len() - drop.len(),
-            drop.len()
-        );
+        let notice = Notice::ReplayingKeepingBase {
+            replayed: local.len() - drop.len(),
+            onto: shown,
+            left_out: drop.len(),
+            upstream: upstream.to_owned(),
+        };
+        println!("rebase-replaces: {notice}");
         onto
     } else {
-        println!(
-            "rebase-replaces: replaying {} commits onto {upstream}, leaving out {} it already holds",
-            local.len() - drop.len(),
-            drop.len()
-        );
+        let notice = Notice::Replaying {
+            replayed: local.len() - drop.len(),
+            upstream: upstream.to_owned(),
+            left_out: drop.len(),
+        };
+        println!("rebase-replaces: {notice}");
         up
     };
 
@@ -405,8 +421,8 @@ fn retargeted(
         .map_or(target.to_owned(), |d| format!("{} {}", d.short, d.subject));
     let Some(replacement) = dropped[target].and_then(|r| Some((r, described.get(r)?))) else {
         println!(
-            "rebase-replaces: {} names {left_out}, which is left out, and no single commit replaces it; replaying it as it is",
-            this
+            "rebase-replaces: {}",
+            Notice::NoReplacement { this, left_out }
         );
         return Ok(None);
     };
@@ -419,10 +435,13 @@ fn retargeted(
     if named == reference {
         return Ok(None);
     }
-    println!(
-        "rebase-replaces: making {} name {} {}, which replaces {left_out}",
-        this, new.short, new.subject
-    );
+    let notice = Notice::Retargeting {
+        this,
+        short: new.short.clone(),
+        subject: new.subject.clone(),
+        left_out,
+    };
+    println!("rebase-replaces: {notice}");
     let mut reworded = message[..end - reference.len()].to_vec();
     reworded.extend_from_slice(named.as_bytes());
     reworded.extend_from_slice(&message[end..]);
