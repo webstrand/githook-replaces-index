@@ -366,17 +366,9 @@ fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Er
 
 /// Every note of the notes commit `notes`, as pairs of the commit annotated and the note's blob.
 fn all_notes(notes: &str) -> Result<Vec<(String, String)>, Error> {
-    // `<mode> blob <blob>\t<path>\0` for each note.
-    let tree = runner::stdout_bytes(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
-        .map_err(Error::Notes)?;
-    // A file whose path is not UTF-8, or does not spell a commit id, is no note.
-    Ok(runner::nul_fields(&tree)
-        .flatten()
-        .filter_map(|entry| {
-            let (header, path) = entry.split_once('\t')?;
-            let blob = header.split(' ').nth(2)?;
-            let commit = path.replace('/', "");
-            is_id(&commit).then(|| (commit, blob.to_owned()))
-        })
+    Ok(replaces_index_record::note_files(notes)
+        .map_err(Error::Notes)?
+        .into_iter()
+        .map(|(commit, file)| (commit, file.blob))
         .collect())
 }

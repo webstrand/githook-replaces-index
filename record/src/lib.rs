@@ -459,8 +459,8 @@ impl Changed {
 /// path in the tree of `ours`. A note that `ours` lacks goes at the fanout of the notes of `ours`
 /// rather than at its path in `theirs`, whose fanout may differ, so that the tree keeps one.
 fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
-    let our_files = note_files(ours)?;
-    let their_files = note_files(theirs)?;
+    let our_files = note_files(ours).map_err(Error::Read)?;
+    let their_files = note_files(theirs).map_err(Error::Read)?;
     let depth = fanout(&our_files);
     let differing: Vec<(&str, Option<&NoteFile>, &NoteFile)> = their_files
         .iter()
@@ -499,7 +499,7 @@ fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
 /// lacks goes at the fanout of the notes of `ours`.
 fn add(ours: Option<&str>, additions: &Notes) -> Result<Notes, Error> {
     let our_files = match ours {
-        Some(ours) => note_files(ours)?,
+        Some(ours) => note_files(ours).map_err(Error::Read)?,
         None => BTreeMap::new(),
     };
     let depth = fanout(&our_files).unwrap_or(0);
@@ -551,7 +551,7 @@ pub fn gc() -> Result<Collected, Error> {
 /// The notes of the notes commit `ours` that `gc` changes, by path, the paths of those it
 /// removes, and how many it keeps.
 fn collect(ours: &str) -> Result<(Notes, Vec<String>, usize), Error> {
-    let files = note_files(ours)?;
+    let files = note_files(ours).map_err(Error::Read)?;
     let notes = all_notes(ours)?;
     let present = runner::commits(notes.keys().map(String::as_str)).map_err(Error::Read)?;
     let mut named_by: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -615,7 +615,7 @@ fn fanout(files: &BTreeMap<String, NoteFile>) -> Option<usize> {
 
 /// Every note of the notes commit `notes`, by the commit it annotates.
 pub(crate) fn all_notes(notes: &str) -> Result<Notes, Error> {
-    let files = note_files(notes)?;
+    let files = note_files(notes).map_err(Error::Read)?;
     let blobs: Vec<&str> = files.values().map(|file| file.blob.as_str()).collect();
     let contents = runner::cat_file(&blobs).map_err(Error::Read)?;
     Ok(files
@@ -626,23 +626,25 @@ pub(crate) fn all_notes(notes: &str) -> Result<Notes, Error> {
 }
 
 /// A note as a file of the notes tree.
-struct NoteFile {
+pub struct NoteFile {
     /// Its path, the annotated commit split by the fanout of the tree.
-    path: String,
-    blob: String,
+    pub path: String,
+    pub blob: String,
 }
 
 /// The notes of the notes commit `notes`, by the commit they annotate. A file whose path does not
-/// spell a commit id is not a note.
-fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
-    let out = runner::stdout_bytes(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
-        .map_err(Error::Read)?;
-    // `<mode> blob <blob>\t<path>` for each file; one whose path is not UTF-8 is no note.
+/// spell a commit id, or that is no blob, is not a note.
+pub fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, runner::Error> {
+    let out = runner::stdout_bytes(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))?;
+    // `<mode> <type> <object>\t<path>` for each file; one whose path is not UTF-8 is no note.
     Ok(runner::nul_fields(&out)
         .flatten()
         .filter_map(|entry| {
             let (meta, path) = entry.split_once('\t')?;
-            let blob = meta.strip_prefix("100644 blob ")?;
+            let blob = match meta.split(' ').collect::<Vec<_>>()[..] {
+                [_, "blob", blob] => blob,
+                _ => return None,
+            };
             let commit: String = path.chars().filter(|&c| c != '/').collect();
             if !is_id(&commit) {
                 return None;
