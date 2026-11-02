@@ -3,7 +3,8 @@
 # puts the programs in bin/ in its common git directory, the repository's config
 # registers the post-rewrite hook, so that it runs beside any other post-rewrite
 # hooks, and defines the aliases `git whereis`, `git pull-replaces`,
-# `git compare-replaces` and `git rebase-replaces`; the skill is linked into
+# `git compare-replaces`, `git rebase-replaces` and `git gc-replaces`; the
+# skill is linked into
 # .claude/skills/ of the checkout. The commands find the git directory each time
 # they run, so the repository may move. Running this again updates them. It needs
 # no more than the bash 3.2 and the tools that macOS ships.
@@ -33,6 +34,7 @@ git config alias.whereis "!$bin/git-whereis"
 git config alias.pull-replaces "!$bin/git-pull-replaces"
 git config alias.compare-replaces "!$bin/git-compare-replaces"
 git config alias.rebase-replaces "!$bin/git-rebase-replaces"
+git config alias.gc-replaces "!$bin/replaces-index-record --gc"
 # A fetch refspec such as +refs/notes/*:refs/notes/* replaces the notes on each
 # fetch; it is named, with the command that keeps the notes out of it.
 "$root/bin/replaces-index-record" --check-refspecs

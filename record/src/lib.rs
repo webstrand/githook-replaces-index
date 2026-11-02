@@ -25,6 +25,7 @@ mod repair;
 
 pub use crate::repair::{Repaired, repair, repair_and_say, warn_forcing};
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{BuildHasher, RandomState};
 use std::io::Write as _;
@@ -182,6 +183,9 @@ enum Change<'a> {
     Merge(&'a str),
     /// Lines to add to the notes of the commits they are given for, which a writer dropped.
     Add(&'a Notes),
+    /// The removal of the notes of commits the clone no longer has, as `gc` removes them, which
+    /// tells how many it removed and kept.
+    Collect(&'a Cell<Collected>),
 }
 
 /// Writes `change`, retrying while other writers move the ref, and calls `written` as soon as the
@@ -331,9 +335,26 @@ fn attempt(change: Change, ident: &mut Option<Vec<u8>>) -> Result<Attempt, Error
             None => return move_ref(theirs, None),
             Some(ours) if is_ancestor(theirs, ours)? => return Ok(Attempt::Written),
             Some(ours) if is_ancestor(ours, theirs)? => return move_ref(theirs, Some(ours)),
-            Some(ours) => (Changed::ByPath(union(ours, theirs)?), Some(theirs)),
+            Some(ours) => (
+                Changed::ByPath(union(ours, theirs)?, Vec::new()),
+                Some(theirs),
+            ),
         },
-        Change::Add(additions) => (Changed::ByPath(add(parent.as_deref(), additions)?), None),
+        Change::Add(additions) => (
+            Changed::ByPath(add(parent.as_deref(), additions)?, Vec::new()),
+            None,
+        ),
+        Change::Collect(collected) => match parent.as_deref() {
+            None => return Ok(Attempt::Written),
+            Some(ours) => {
+                let (changed, removed, kept) = collect(ours)?;
+                collected.set(Collected {
+                    removed: removed.len(),
+                    kept,
+                });
+                (Changed::ByPath(changed, removed), None)
+            }
+        },
     };
     if changed.is_empty() {
         return Ok(Attempt::Written);
@@ -402,13 +423,15 @@ fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
 /// which annotate commits the clone may lack.
 enum Changed {
     ByCommit(Notes, Paths),
-    ByPath(Notes),
+    /// With the paths of the notes it removes.
+    ByPath(Notes, Vec<String>),
 }
 
 impl Changed {
     fn is_empty(&self) -> bool {
         match self {
-            Self::ByCommit(notes, _) | Self::ByPath(notes) => notes.is_empty(),
+            Self::ByCommit(notes, _) => notes.is_empty(),
+            Self::ByPath(notes, removed) => notes.is_empty() && removed.is_empty(),
         }
     }
 }
@@ -484,6 +507,82 @@ fn add(ours: Option<&str>, additions: &Notes) -> Result<Notes, Error> {
         }
     }
     Ok(changed)
+}
+
+/// What `gc` did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Collected {
+    /// The notes of commits the clone no longer has that it removed, once the notes that name
+    /// them held their lines.
+    pub removed: usize,
+    /// Those it kept, which no note of a commit the clone has names, and which are therefore the
+    /// only record of what they hold.
+    pub kept: usize,
+}
+
+/// Removes the notes of the commits that the clone no longer has, once garbage collection
+/// removed them, as `git notes prune` does, and adds the lines of each to the notes of the commits
+/// the clone has that name it, directly or through other notes removed, so that what it recorded
+/// is kept. A note that none names stays.
+pub fn gc() -> Result<Collected, Error> {
+    let collected = Cell::new(Collected::default());
+    write(Change::Collect(&collected), || {})?;
+    Ok(collected.get())
+}
+
+/// The notes of the notes commit `ours` that `gc` changes, by path, the paths of those it
+/// removes, and how many it keeps.
+fn collect(ours: &str) -> Result<(Notes, Vec<String>, usize), Error> {
+    let files = note_files(ours)?;
+    let notes = all_notes(ours)?;
+    let present = runner::commits(notes.keys().map(String::as_str)).map_err(Error::Read)?;
+    // The commits whose notes name each commit.
+    let mut named_by: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (commit, note) in &notes {
+        for line in note {
+            let named = line
+                .strip_prefix(REPLACES.as_bytes())
+                .and_then(|id| std::str::from_utf8(id).ok())
+                .filter(|id| is_id(id));
+            if let Some(named) = named {
+                named_by.entry(named).or_default().push(commit);
+            }
+        }
+    }
+    let mut additions = Notes::new();
+    let mut removed = Vec::new();
+    let mut kept = 0;
+    for (commit, note) in notes.iter().filter(|(c, _)| !present.contains(*c)) {
+        // The commits the clone has whose notes name this one, through notes of commits it lacks.
+        let mut targets = BTreeSet::new();
+        let mut seen = BTreeSet::from([commit.as_str()]);
+        let mut stack = vec![commit.as_str()];
+        while let Some(next) = stack.pop() {
+            for &namer in named_by.get(next).into_iter().flatten() {
+                if present.contains(namer) {
+                    targets.insert(namer);
+                } else if seen.insert(namer) {
+                    stack.push(namer);
+                }
+            }
+        }
+        if targets.is_empty() {
+            kept += 1;
+            continue;
+        }
+        for target in targets {
+            // A commit that a cycle of rewrites names does not come to replace itself.
+            let own = format!("{REPLACES}{target}").into_bytes();
+            additions
+                .entry(target.to_owned())
+                .or_default()
+                .extend(note.iter().filter(|line| **line != own).cloned());
+        }
+        if let Some(file) = files.get(commit) {
+            removed.push(file.path.clone());
+        }
+    }
+    Ok((add(Some(ours), &additions)?, removed, kept))
 }
 
 /// The depth of fanout that most of `files` are at, if there are any.
@@ -701,7 +800,10 @@ fn stream(ident: &[u8], parent: Option<&str>, theirs: Option<&str>, notes: &Chan
                 data(&mut stream, lines);
             }
         }
-        Changed::ByPath(notes) => {
+        Changed::ByPath(notes, removed) => {
+            for path in removed {
+                let _ = writeln!(stream, "D {path}");
+            }
             for (path, lines) in notes {
                 let _ = writeln!(stream, "M 100644 inline {path}");
                 data(&mut stream, lines);

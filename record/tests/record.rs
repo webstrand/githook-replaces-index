@@ -463,3 +463,51 @@ fn warns_of_a_refspec_that_replaces_the_notes_on_each_fetch() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn gc_removes_the_notes_of_commits_gone_and_keeps_their_lines() {
+    let (dir, _) = repo(["base"]);
+    let repo = dir.path();
+    let made = |message: &str| {
+        let args = ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", message];
+        git(repo, &args).unwrap().trim().to_owned()
+    };
+    // `a'` was made from `a`, and `a''` from `a'`; only `a''` stays reachable.
+    let [a, a2, a3] = ["a", "a'", "a''"].map(made);
+    record(repo, &format!("{a} {a2}\n{a2} {a3}\n"));
+    // A line that the note of `a'` holds and that of `a''` lacks, as when the note of `a'` arrived
+    // from another clone after `a''` was made.
+    let other = format!("replaces: {}", "1".repeat(40));
+    git(
+        repo,
+        &["notes", "--ref=replaces", "append", "-m", &other, &a2],
+    )
+    .unwrap();
+    // A commit that no note names.
+    let x = made("x");
+    let line = format!("replaces: {}", "2".repeat(40));
+    git(repo, &["notes", "--ref=replaces", "add", "-m", &line, &x]).unwrap();
+    git(repo, &["update-ref", "refs/heads/kept", &a3]).unwrap();
+    git(repo, &["reflog", "expire", "--expire=now", "--all"]).unwrap();
+    git(repo, &["gc", "-q", "--prune=now"]).unwrap();
+    // A write after the reflog expired, so that the repair sees the step that gc makes.
+    let [b, b2] = ["b", "b'"].map(made);
+    record(repo, &format!("{b} {b2}\n"));
+
+    let output = isolated(repo, RECORD, &["--gc"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stdout.contains("removed 1 notes") && stdout.contains("kept 1"),
+        "{stdout}"
+    );
+    // The repair after gc takes the removal for one that loses nothing.
+    assert!(!stderr.contains("put back"), "{stderr}");
+    assert_eq!(note(repo, &a2), None);
+    assert!(note(repo, &a3).unwrap().contains(&other));
+    assert_eq!(
+        note(repo, &x).as_deref(),
+        Some(format!("{line}\n").as_str())
+    );
+}

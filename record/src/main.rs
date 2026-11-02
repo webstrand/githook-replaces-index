@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::process::ExitCode;
 
 use clap::Parser;
-use replaces_index_record::{Error, Rewrite, abandoned, heartbeat, record};
+use replaces_index_record::{Error, Rewrite, abandoned, gc, heartbeat, record};
 
 #[derive(Parser)]
 #[command(name = "record", about)]
@@ -19,6 +19,10 @@ struct Cli {
     /// nothing.
     #[arg(long, conflicts_with = "abandoned")]
     check_refspecs: bool,
+    /// Removes the notes of commits the clone no longer has, keeping their lines in the notes that
+    /// name them, and records nothing; `git gc-replaces` runs this.
+    #[arg(long, conflicts_with_all = ["abandoned", "check_refspecs"])]
+    gc: bool,
 }
 
 fn main() -> ExitCode {
@@ -26,6 +30,22 @@ fn main() -> ExitCode {
     if cli.check_refspecs {
         replaces_index_record::warn_forcing("replaces-index");
         return ExitCode::SUCCESS;
+    }
+    if cli.gc {
+        return match heartbeat::while_running("gc-replaces", "Ctrl-C to give up", gc) {
+            Ok(collected) => {
+                println!(
+                    "gc-replaces: removed {} notes of commits this clone no longer has, whose lines the notes that name them hold; kept {} that no note names",
+                    collected.removed, collected.kept
+                );
+                replaces_index_record::repair_and_say("gc-replaces");
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("gc-replaces: {err}");
+                ExitCode::FAILURE
+            }
+        };
     }
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
