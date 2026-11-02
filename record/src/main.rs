@@ -56,13 +56,13 @@ fn main() -> ExitCode {
                         ExitCode::SUCCESS
                     }
                     Err(err) => {
-                        eprintln!("gc-replaces: {}", runner::chain(&err));
+                        replaces_index_record::notice::say("gc-replaces", &err);
                         ExitCode::FAILURE
                     }
                 }
             }
             Err(err) => {
-                eprintln!("gc-replaces: {}", runner::chain(&err));
+                replaces_index_record::notice::say("gc-replaces", &err);
                 ExitCode::FAILURE
             }
         };
@@ -70,7 +70,7 @@ fn main() -> ExitCode {
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("replaces-index: {}", runner::chain(&err));
+            replaces_index_record::notice::say("replaces-index", &err);
             ExitCode::FAILURE
         }
     }

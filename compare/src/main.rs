@@ -32,14 +32,14 @@ fn main() -> ExitCode {
     let entries = match compare(&cli.old, &cli.new) {
         Ok(entries) => entries,
         Err(err) => {
-            eprintln!("compare-replaces: {}", runner::chain(&err));
+            replaces_index_record::notice::say("compare-replaces", &err);
             return ExitCode::FAILURE;
         }
     };
     let described = match describe(entries.iter().map(|entry| entry.commit.as_str())) {
         Ok(described) => described,
         Err(err) => {
-            eprintln!("compare-replaces: {}", runner::chain(&err));
+            replaces_index_record::notice::say("compare-replaces", &err);
             return ExitCode::FAILURE;
         }
     };
