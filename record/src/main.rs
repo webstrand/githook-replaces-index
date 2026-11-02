@@ -15,10 +15,18 @@ struct Cli {
     /// Records the abandoned records alone, without reading a rewrite.
     #[arg(long)]
     abandoned: bool,
+    /// Says which fetch refspecs would replace refs/notes/replaces on each fetch, and records
+    /// nothing.
+    #[arg(long, conflicts_with = "abandoned")]
+    check_refspecs: bool,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.check_refspecs {
+        replaces_index_record::warn_forcing("replaces-index");
+        return ExitCode::SUCCESS;
+    }
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

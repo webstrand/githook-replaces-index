@@ -33,6 +33,9 @@ git config alias.whereis "!$bin/git-whereis"
 git config alias.pull-replaces "!$bin/git-pull-replaces"
 git config alias.compare-replaces "!$bin/git-compare-replaces"
 git config alias.rebase-replaces "!$bin/git-rebase-replaces"
+# A fetch refspec such as +refs/notes/*:refs/notes/* replaces the notes on each
+# fetch; it is named, with the command that keeps the notes out of it.
+"$root/bin/replaces-index-record" --check-refspecs
 
 # The path of directory $2 relative to directory $1, both absolute and free of
 # symbolic links.

@@ -133,9 +133,41 @@ fn drops_lines(before: &str, after: &str) -> Result<bool, Error> {
         .any(|pair| !lines(&pair[0]).is_subset(&lines(&pair[1]))))
 }
 
+/// Says on standard error, after `prefix`, which fetch refspecs move the ref whether or not it
+/// fast-forwards, as `+refs/notes/*:refs/notes/*` does, and so drop on each fetch what the clone
+/// recorded since, and how to keep the ref out of them; a failure to read them is said as well.
+pub fn warn_forcing(prefix: &str) {
+    let mut stderr = io::stderr();
+    match runner::refspec::forcing(REF) {
+        Ok(forcing) => {
+            for refspec in forcing {
+                let src = refspec.source_of(REF).unwrap_or_default();
+                let _ = writeln!(
+                    stderr,
+                    "{prefix}: remote.{}.fetch {} replaces {REF} on each fetch, dropping what this clone recorded since; to keep {REF} out of it: git config --add {} {}",
+                    refspec.remote,
+                    refspec.text,
+                    shell_quote(&format!("remote.{}.fetch", refspec.remote)),
+                    shell_quote(&format!("^{src}"))
+                );
+            }
+        }
+        Err(err) => {
+            let _ = writeln!(stderr, "{prefix}: could not read the fetch refspecs: {err}");
+        }
+    }
+}
+
+/// `word` as the shell reads it back.
+fn shell_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
 /// Repairs the notes, and says on standard error, after `prefix`, what the repair put back, or
-/// why it could not check them; a failure to check does not stop the program.
+/// why it could not check them; a failure to check does not stop the program. It then says which
+/// fetch refspecs would drop lines again, as `warn_forcing` does.
 pub fn repair_and_say(prefix: &str) {
+    warn_forcing(prefix);
     let mut stderr = io::stderr();
     match repair() {
         Ok(repaired) => {

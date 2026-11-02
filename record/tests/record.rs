@@ -430,3 +430,36 @@ fn keeps_the_bytes_of_a_note_that_is_not_utf8() {
     expected.extend_from_slice(format!("replaces: {a}\n").as_bytes());
     assert_eq!(output.stdout, expected);
 }
+
+#[test]
+fn warns_of_a_refspec_that_replaces_the_notes_on_each_fetch() {
+    let (dir, ids) = repo(["a", "b"]);
+    let (repo, [a, b]) = (dir.path(), ids.each_ref());
+    git(repo, &["remote", "add", "origin", "/nowhere"]).unwrap();
+    let key = "remote.origin.fetch";
+    git(
+        repo,
+        &["config", "--add", key, "+refs/notes/*:refs/notes/*"],
+    )
+    .unwrap();
+    let output = run_record(repo, &format!("{a} {b}\n"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("remote.origin.fetch +refs/notes/*:refs/notes/* replaces")
+            && stderr.contains("git config --add 'remote.origin.fetch' '^refs/notes/replaces'"),
+        "{stderr}"
+    );
+
+    // The command it gives keeps the ref out of the refspec, and the warning stops.
+    git(repo, &["config", "--add", key, "^refs/notes/replaces"]).unwrap();
+    let output = isolated(repo, RECORD, &["--check-refspecs"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
