@@ -87,7 +87,7 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
         .trim()
         .to_owned();
 
-    if let Some(remote) = remote_of(&full).map_err(upstream_error)? {
+    if let Some(remote) = runner::refspec::remote_of(&full).map_err(upstream_error)? {
         let remote = remote.as_str();
         let pulled = fetch_and_pull(remote).map_err(|source| Error::Pull {
             remote: remote.to_owned(),
@@ -223,50 +223,6 @@ fn kept_base(up: &str, replacing: &[&str], upstream: &str) -> Result<String, Err
             tips: shorts(&tips.iter().map(|t| (*t).to_owned()).collect::<Vec<_>>()),
         }),
     }
-}
-
-/// The remote that a fetch brings the ref `full` from: the first whose fetch refspecs map a ref of
-/// it to `full`. The ref's name alone does not tell, since a remote may keep its refs anywhere.
-fn remote_of(full: &str) -> Result<Option<String>, runner::Error> {
-    let mut config = git(["config", "-z", "--get-regexp", r"^remote\..*\.fetch$"]);
-    let output = runner::run(&mut config)?;
-    // git config exits with 1 when no remote has a fetch refspec.
-    if output.status.code() != Some(1) {
-        runner::check(&config, &output)?;
-    }
-    let out = String::from_utf8_lossy(&output.stdout);
-    // `remote.<name>.fetch\n<refspec>\0` for each refspec.
-    for entry in out.split('\0') {
-        let Some((key, refspec)) = entry.split_once('\n') else {
-            continue;
-        };
-        let Some(name) = key
-            .strip_prefix("remote.")
-            .and_then(|k| k.strip_suffix(".fetch"))
-        else {
-            continue;
-        };
-        let refspec = refspec.strip_prefix('+').unwrap_or(refspec);
-        // A negative refspec excludes refs, and maps none.
-        if refspec.starts_with('^') {
-            continue;
-        }
-        let Some((_, destination)) = refspec.split_once(':') else {
-            continue;
-        };
-        let maps = match destination.split_once('*') {
-            Some((before, after)) => {
-                full.len() > before.len() + after.len()
-                    && full.starts_with(before)
-                    && full.ends_with(after)
-            }
-            None => destination == full,
-        };
-        if maps {
-            return Ok(Some(name.to_owned()));
-        }
-    }
-    Ok(None)
 }
 
 /// Every commit that the reflog of the upstream's ref `full` shows it held, and that `up` lacks.

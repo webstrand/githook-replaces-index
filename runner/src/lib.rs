@@ -1,5 +1,7 @@
 //! Runs git for the replaces-index programs, and reports its failures.
 
+pub mod refspec;
+
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
