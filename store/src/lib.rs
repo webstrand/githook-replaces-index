@@ -341,40 +341,21 @@ fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Er
     if !is_ancestor(from, to)? {
         return Ok(None);
     }
-    // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each note that changed.
-    let diff = runner::stdout_bytes(&mut git([
-        "diff-tree",
-        "-r",
-        "-z",
-        "--no-renames",
-        from,
-        to,
-    ]))
-    .map_err(Error::Notes)?;
     // A note that moved to another fanout shows as removed at one path and added at another, and
     // was removed only if it was added nowhere.
-    let mut fields = runner::nul_fields(&diff);
     let mut changed = Vec::new();
     let mut removed = BTreeSet::new();
-    while let (Some(header), Some(path)) = (fields.next(), fields.next()) {
-        let Some(header) = header else {
-            return Ok(None);
-        };
-        // A file whose path is not UTF-8, or does not spell a commit id, is no note.
-        let Some(path) = path.filter(|path| is_id(&path.replace('/', ""))) else {
+    for file in runner::diff_tree(from, to).map_err(Error::Notes)? {
+        // A file whose path does not spell a commit id is no note.
+        let commit = file.path.replace('/', "");
+        if !is_id(&commit) {
             continue;
-        };
-        let words: Vec<&str> = header.split(' ').collect();
-        let (Some(blob), Some(status)) = (words.get(3), words.get(4)) else {
-            return Ok(None);
-        };
-        let commit = path.replace('/', "");
-        match *status {
-            "A" | "M" => changed.push((commit, (*blob).to_owned())),
-            "D" => {
+        }
+        match file.new {
+            Some(blob) => changed.push((commit, blob)),
+            None => {
                 removed.insert(commit);
             }
-            _ => return Ok(None),
         }
     }
     for (commit, _) in &changed {

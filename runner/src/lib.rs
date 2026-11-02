@@ -286,6 +286,52 @@ pub fn rev_parse_paths(args: &[&str]) -> Result<Vec<PathBuf>, Error> {
         .collect())
 }
 
+/// A file that `git diff-tree` found changed between two trees: its path, and its blob before and
+/// after, none on the side it did not exist on.
+pub struct Changed {
+    pub path: String,
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
+/// The files that changed between the trees of `from` and `to`, by one
+/// `git diff-tree -r -z --no-renames`. A file whose path is not UTF-8 is left out.
+pub fn diff_tree(from: &str, to: &str) -> Result<Vec<Changed>, Error> {
+    let mut command = git(["diff-tree", "-r", "-z", "--no-renames", from, to]);
+    let output = run(&mut command)?;
+    check(&command, &output)?;
+    let malformed = || Error::Failed {
+        command: describe(&command),
+        status: output.status,
+        stderr: "its output could not be read".to_owned(),
+    };
+    // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each file that changed.
+    let mut fields = nul_fields(&output.stdout);
+    let mut changed = Vec::new();
+    while let Some(header) = fields.next() {
+        let path = fields.next().ok_or_else(malformed)?;
+        let header = header.ok_or_else(malformed)?;
+        let words: Vec<&str> = header.split(' ').collect();
+        let [_, _, old, new, status] = words[..] else {
+            return Err(malformed());
+        };
+        let (old, new) = match status {
+            "A" => (None, Some(new)),
+            "D" => (Some(old), None),
+            "M" | "T" => (Some(old), Some(new)),
+            _ => return Err(malformed()),
+        };
+        if let Some(path) = path {
+            changed.push(Changed {
+                path: path.to_owned(),
+                old: old.map(str::to_owned),
+                new: new.map(str::to_owned),
+            });
+        }
+    }
+    Ok(changed)
+}
+
 /// The contents of the objects `ids`, in their order, read by one `git cat-file --batch`; `None`
 /// for an object that the repository lacks.
 pub fn cat_file<S: AsRef<str>>(ids: &[S]) -> Result<Vec<Option<Vec<u8>>>, Error> {

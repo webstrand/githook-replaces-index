@@ -166,47 +166,29 @@ fn placed(
 /// The lines of the notes of the notes commit `before` that the notes commit `after` lacks, by
 /// the commit whose note held them.
 fn dropped(before: &str, after: &str) -> Result<Notes, Error> {
-    let out = runner::stdout_bytes(&mut git([
-        "diff-tree",
-        "-r",
-        "-z",
-        "--no-renames",
-        before,
-        after,
-    ]))
-    .map_err(Error::Read)?;
-    // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each file that changed. A note that
-    // moved to another fanout, as every note does once their number crosses a power of 256, shows
-    // as removed at one path and added at another, and is compared by the commit it annotates.
-    let mut fields = runner::nul_fields(&out);
+    // A note that moved to another fanout, as every note does once their number crosses a power
+    // of 256, shows as removed at one path and added at another, and is compared by the commit it
+    // annotates.
     let mut olds = BTreeMap::new();
     let mut news = BTreeMap::new();
-    while let (Some(meta), Some(path)) = (fields.next(), fields.next()) {
-        // A file whose path is not UTF-8 is no note.
-        let (Some(meta), Some(path)) = (meta, path) else {
-            continue;
-        };
-        let words: Vec<&str> = meta.split(' ').collect();
-        let [_, _, old, new, status] = words[..] else {
-            continue;
-        };
-        let commit = path.replace('/', "");
+    for file in runner::diff_tree(before, after).map_err(Error::Read)? {
         // A file whose path spells no commit id is no note, and holds no lines to drop.
+        let commit = file.path.replace('/', "");
         if !is_id(&commit) {
             continue;
         }
-        if matches!(status, "D" | "M") {
+        if let Some(old) = file.old {
             olds.insert(commit.clone(), old);
         }
-        if matches!(status, "A" | "M") {
+        if let Some(new) = file.new {
             news.insert(commit, new);
         }
     }
     let (commits, blobs): (Vec<&String>, Vec<&str>) = olds
         .iter()
         .flat_map(|(commit, old)| {
-            let new = news.get(commit).copied();
-            [(commit, *old)]
+            let new = news.get(commit).map(String::as_str);
+            [(commit, old.as_str())]
                 .into_iter()
                 .chain(new.map(|new| (commit, new)))
         })
