@@ -290,3 +290,21 @@ fn writes_a_note_it_lacked_at_the_fanout_of_its_own_notes() {
         format!("{}\n{}\n", nested(&b), nested(&d))
     );
 }
+
+#[test]
+fn merges_from_a_subdirectory_as_from_the_top() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    let (a, b, x) = (id('a'), id('b'), id('e'));
+    note_add(theirs, &b, &format!("replaces: {a}\n"));
+    note_add(ours, &b, &format!("replaces: {x}\n"));
+    let sub = ours.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+
+    let (ok, _, stderr) = run(&sub, PULL, &["origin"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(note(ours, &b), format!("replaces: {a}\nreplaces: {x}\n"));
+}

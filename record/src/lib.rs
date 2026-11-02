@@ -479,7 +479,8 @@ struct NoteFile {
 /// The notes of the notes commit `notes`, by the commit they annotate. A file whose path does not
 /// spell a commit id is not a note.
 fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
-    let out = runner::stdout(&mut git(["ls-tree", "-r", "-z", notes])).map_err(Error::Read)?;
+    let out = runner::stdout(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
+        .map_err(Error::Read)?;
     // `<mode> blob <blob>\t<path>` for each file.
     Ok(out
         .split('\0')

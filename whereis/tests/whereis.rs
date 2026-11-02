@@ -138,3 +138,21 @@ fn finds_a_commit_the_clone_lacks_by_a_prefix() {
         "whereis: eeeeeeee is not a commit of this clone or of refs/notes/replaces\n"
     );
 }
+
+#[test]
+fn builds_the_index_from_a_subdirectory_as_from_the_top() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    commit(repo, "base");
+    let a = commit(repo, "a");
+    let a2 = commit(repo, "a'");
+    let note = format!("replaces: {a}");
+    git(repo, &["notes", "--ref=replaces", "add", "-m", &note, &a2]);
+    let sub = repo.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+
+    let expected = format!("from {a} main\nself {a2} main\n");
+    assert_eq!(whereis(&sub, &a2), expected);
+    assert_eq!(whereis(repo, &a2), expected);
+}

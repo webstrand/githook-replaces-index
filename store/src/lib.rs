@@ -333,7 +333,8 @@ fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Er
 /// Every note of the notes commit `notes`, as pairs of the commit annotated and the note's blob.
 fn all_notes(notes: &str) -> Result<Vec<(String, String)>, Error> {
     // `<mode> blob <blob>\t<path>\0` for each note.
-    let tree = runner::stdout(&mut git(["ls-tree", "-r", "-z", notes])).map_err(Error::Notes)?;
+    let tree = runner::stdout(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
+        .map_err(Error::Notes)?;
     Ok(tree
         .split('\0')
         .filter_map(|entry| {
