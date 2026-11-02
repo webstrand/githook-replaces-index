@@ -220,16 +220,7 @@ fn open_current(path: &std::path::Path, notes: Option<&str>) -> Result<Opened, E
         Err(source) => return Err(index_error(path, source)),
     };
     let indexed = indexed_notes(&db).map_err(|e| index_error(path, e))?;
-    let current = match (indexed.as_deref(), notes) {
-        (indexed, notes) if indexed == notes => true,
-        // Lines are only ever added to the notes, so an index built from notes that descend from
-        // these holds every line of them: a process that read the ref just before another moved
-        // it and brought the index up to date uses the index as it is, rather than index the
-        // older notes anew.
-        (Some(indexed), Some(notes)) => is_ancestor(notes, indexed)?,
-        _ => false,
-    };
-    Ok(if current {
+    Ok(if covers(indexed.as_deref(), notes)? {
         Opened::Current(db)
     } else {
         Opened::Stale
@@ -258,11 +249,24 @@ fn indexed_notes(db: &impl ReadableDatabase) -> Result<Option<String>, redb::Err
     Ok(meta.get(NOTES)?.map(|id| id.value().to_owned()))
 }
 
+/// Whether an index built from the notes commit `indexed` holds every line of `notes`. Lines are
+/// only ever added to the notes, so an index built from notes that descend from these does: a
+/// process that read the ref just before another moved it and brought the index up to date uses
+/// the index as it is, rather than index the older notes anew.
+fn covers(indexed: Option<&str>, notes: Option<&str>) -> Result<bool, Error> {
+    match (indexed, notes) {
+        (indexed, notes) if indexed == notes => Ok(true),
+        (Some(indexed), Some(notes)) => is_ancestor(notes, indexed),
+        _ => Ok(false),
+    }
+}
+
 /// Brings `db` up to date with the notes commit `notes`.
 fn update(db: &Database, path: &std::path::Path, notes: Option<&str>) -> Result<(), Error> {
     let err = |source: redb::Error| index_error(path, source);
     let indexed = indexed_notes(db).map_err(err)?;
-    if indexed.as_deref() == notes {
+    // Another process may have brought the index past `notes` since it was found stale.
+    if covers(indexed.as_deref(), notes)? {
         return Ok(());
     }
     let added = match (indexed.as_deref(), notes) {
