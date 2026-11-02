@@ -32,7 +32,7 @@ fn rebase_onto_upstream(repo: &Path, script: &str) -> String {
 
 /// The amends that the hook set aside during the rebase in progress.
 fn set_aside(repo: &Path) -> Vec<(String, String)> {
-    let text = fs::read_to_string(repo.join(".git/rebase-merge/replaces-index-amended")).unwrap();
+    let text = fs::read_to_string(repo.join(".git/rebase-merge/replaces-index-deferred")).unwrap();
     text.lines()
         .map(|line| {
             let (old, new) = line.split_once(' ').unwrap();
@@ -49,14 +49,18 @@ fn assert_fell_back(repo: &Path, stderr: &str) {
 
 /// An exec line that makes the file of the amends set aside unreadable, as a directory.
 const BREAK_AMENDS: &str =
-    "exec f=$(git rev-parse --git-path rebase-merge/replaces-index-amended); rm -f $f; mkdir $f";
+    "exec f=$(git rev-parse --git-path rebase-merge/replaces-index-deferred); rm -f $f; mkdir $f";
 
 #[test]
 fn an_amend_that_cannot_be_set_aside_is_recorded_at_once() {
     let (repo, a, _) = diverged();
     rebase_keeping(repo.path(), "upstream", "1s/^pick/edit/");
     let a1 = ok(repo.path(), &["rev-parse", "HEAD"]);
-    fs::create_dir(repo.path().join(".git/rebase-merge/replaces-index-amended")).unwrap();
+    fs::create_dir(
+        repo.path()
+            .join(".git/rebase-merge/replaces-index-deferred"),
+    )
+    .unwrap();
     let stderr = stderr_of(git(
         repo.path(),
         &["commit", "-q", "--amend", "-m", "a, amended"],

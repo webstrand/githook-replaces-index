@@ -38,7 +38,9 @@ pub use crate::error::Error;
 /// The command that rewrote the commits, as git passes it to the hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Kind {
-    Amend,
+    /// A single-commit rewrite, which git calls `amend`.
+    #[value(name = "amend")]
+    Single,
     Rebase,
     /// A run of git filter-repo, which `record-filter-repo` passes on.
     FilterRepo,
@@ -137,19 +139,22 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
         }
     };
     match kind {
-        Kind::Amend => {
-            let mut aside = Vec::new();
+        Kind::Single => {
+            let mut deferred = Vec::new();
             let edited = edited(&state).unwrap_or_else(|err| {
-                warn(err, "an amend at a stop for an edit is recorded at once");
+                warn(
+                    err,
+                    "a replacement of the commit stopped at for an edit is recorded at once",
+                );
                 String::new()
             });
             // The commits that amends recorded at once made: nothing that the rebase reports
             // leads to them either, so their own amends are recorded at once as well, at the cost
             // of naming the commit between.
-            let made_at_once: HashSet<String> = match Amends::read(&state.join(AT_ONCE)) {
-                Ok(amends) => amends.made.into_iter().map(|(_, new)| new).collect(),
+            let made_at_once: HashSet<String> = match Replacements::read(&state.join(AT_ONCE)) {
+                Ok(at_once) => at_once.made.into_iter().map(|(_, new)| new).collect(),
                 Err(err) => {
-                    warn(err, "an amend of a commit it names is set aside");
+                    warn(err, "a replacement of a commit it names is deferred");
                     HashSet::new()
                 }
             };
@@ -163,9 +168,9 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
                 };
                 match before {
                     Ok(true) => rewrite.replacements.push(replacement),
-                    Ok(false) => aside.push(replacement),
+                    Ok(false) => deferred.push(replacement),
                     Err(err) => {
-                        warn(err, "the amend is recorded at once");
+                        warn(err, "the replacement is recorded at once");
                         rewrite.replacements.push(replacement);
                     }
                 }
@@ -173,20 +178,20 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
             let mut held = outstanding
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Err(err) = set_aside(&state.join(AMENDED), &aside) {
-                warn(err, "the amend is recorded at once");
-                rewrite.replacements.extend(aside);
+            if let Err(err) = append(&state.join(DEFERRED), &deferred) {
+                warn(err, "the replacement is recorded at once");
+                rewrite.replacements.extend(deferred);
             }
-            if let Err(err) = set_aside(&state.join(AT_ONCE), &rewrite.replacements) {
-                warn(err, "a later amend of the commit it made is set aside");
+            if let Err(err) = append(&state.join(AT_ONCE), &rewrite.replacements) {
+                warn(err, "a later replacement of the commit it made is deferred");
             }
             *held = Some(rewrite.clone());
         }
         Kind::Rebase => {
-            let amends = match Amends::read(&state.join(AMENDED)) {
-                Ok(amends) => amends,
+            let deferred = match Replacements::read(&state.join(DEFERRED)) {
+                Ok(deferred) => deferred,
                 Err(err) => {
-                    warn(err, "the amends made during the rebase are not recorded");
+                    warn(err, "the deferred replacements are not recorded");
                     return rewrite;
                 }
             };
@@ -194,18 +199,15 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
             // cruder form that a failure to follow them records: once a signal arrives, no git
             // command runs to tell which amends to follow.
             let mut crude = rewrite.clone();
-            crude.replacements.extend(amends.made.iter().cloned());
+            crude.replacements.extend(deferred.made.iter().cloned());
             *outstanding
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(crude);
-            match amends.follow(&rewrite, on_branch) {
+            match deferred.follow(&rewrite, on_branch) {
                 Ok(followed) => rewrite = followed,
                 Err(err) => {
-                    warn(
-                        err,
-                        "every amend made during the rebase is recorded as it was made",
-                    );
-                    rewrite.replacements.extend(amends.made);
+                    warn(err, "every deferred replacement is recorded as it was made");
+                    rewrite.replacements.extend(deferred.made);
                 }
             }
         }
@@ -223,8 +225,8 @@ fn tell(message: impl std::fmt::Display) {
     let _ = writeln!(io::stderr(), "replaces-index: {message}");
 }
 
-/// The file of the rebase's state directory in which the hook sets amends aside.
-const AMENDED: &str = "replaces-index-amended";
+/// The file of the rebase's state directory in which the hook keeps the deferred replacements.
+const DEFERRED: &str = "replaces-index-deferred";
 
 /// The file of the rebase's state directory in which the hook keeps the amends it recorded at once.
 const AT_ONCE: &str = "replaces-index-at-once";
@@ -281,12 +283,12 @@ fn on_branch(commit: &str) -> Result<bool, Error> {
     runner::is_ancestor(commit, "HEAD").map_err(Error::Branch)
 }
 
-/// Adds `amends` to those set aside in `path`.
-fn set_aside(path: &Path, amends: &[(String, String)]) -> Result<(), Error> {
-    if amends.is_empty() {
+/// Adds `replacements` to those kept in `path`.
+fn append(path: &Path, replacements: &[(String, String)]) -> Result<(), Error> {
+    if replacements.is_empty() {
         return Ok(());
     }
-    let to_error = |source| Error::WriteAmends {
+    let to_error = |source| Error::WriteReplacements {
         path: path.to_owned(),
         source,
     };
@@ -295,7 +297,7 @@ fn set_aside(path: &Path, amends: &[(String, String)]) -> Result<(), Error> {
         .append(true)
         .open(path)
         .map_err(to_error)?;
-    let lines: String = amends
+    let lines: String = replacements
         .iter()
         .map(|(old, new)| format!("{old} {new}\n"))
         .collect();
@@ -305,19 +307,19 @@ fn set_aside(path: &Path, amends: &[(String, String)]) -> Result<(), Error> {
 /// The amends set aside during a rebase: each commit amended, with the commit that replaced it
 /// last.
 #[derive(Default)]
-struct Amends {
+struct Replacements {
     last: HashMap<String, String>,
     /// Every amend, in the order it was made.
     made: Vec<(String, String)>,
 }
 
-impl Amends {
+impl Replacements {
     fn read(path: &Path) -> Result<Self, Error> {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
             Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
             Err(source) => {
-                return Err(Error::ReadAmends {
+                return Err(Error::ReadReplacements {
                     path: path.to_owned(),
                     source,
                 });
@@ -362,9 +364,9 @@ impl Amends {
             chain.push(next);
             at = next;
         }
-        for &amended in chain[1..].iter().rev() {
-            if kept(amended)? {
-                return Ok(amended);
+        for &made in chain[1..].iter().rev() {
+            if kept(made)? {
+                return Ok(made);
             }
         }
         Ok(commit)

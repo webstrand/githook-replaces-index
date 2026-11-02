@@ -15,9 +15,9 @@ pub enum Error {
     #[error("could not tell whether a commit is on the branch: {0}")]
     Branch(#[source] runner::Error),
     #[error("could not read {path}: {source}")]
-    ReadAmends { path: PathBuf, source: io::Error },
-    #[error("could not set the amend aside in {path}: {source}")]
-    WriteAmends { path: PathBuf, source: io::Error },
+    ReadReplacements { path: PathBuf, source: io::Error },
+    #[error("could not add the replacements to {path}: {source}")]
+    WriteReplacements { path: PathBuf, source: io::Error },
     #[error("{0}")]
     Record(#[source] replaces_index_record::Error),
 }
