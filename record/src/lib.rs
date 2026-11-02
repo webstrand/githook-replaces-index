@@ -20,8 +20,8 @@
 
 pub mod abandoned;
 mod error;
-pub mod fetched;
 pub mod heartbeat;
+pub mod leftovers;
 mod repair;
 
 pub use crate::repair::{Repaired, check_refspecs, repair, repair_and_say};

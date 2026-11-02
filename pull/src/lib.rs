@@ -14,7 +14,7 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 use replaces_index_record::REF;
-use replaces_index_record::fetched::FETCHED;
+use replaces_index_record::leftovers::FETCHED;
 use runner::git;
 
 pub use crate::error::Error;

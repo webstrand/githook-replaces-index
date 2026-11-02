@@ -180,7 +180,15 @@ fn index_error(path: &std::path::Path, source: impl Into<redb::Error>) -> Error 
 /// renames it into place once built: a database that redb creates is an empty file for a moment,
 /// which another process that opened it then would take for damaged.
 fn build(path: &std::path::Path, notes: Option<&str>) -> Result<(), Error> {
-    let building = path.with_file_name(format!(".index.redb.{}", std::process::id()));
+    if let Some(dir) = path.parent() {
+        let expiry = replaces_index_record::leftovers::Expiry::read().map_err(Error::Ref)?;
+        expiry.sweep_files(dir, building_time);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let building = path.with_file_name(format!("{BUILDING}{now}.{}", std::process::id()));
     let built = Database::create(&building)
         .map_err(|source| index_error(&building, source))
         .and_then(|db| update(&db, &building, notes))
@@ -194,6 +202,15 @@ fn build(path: &std::path::Path, notes: Option<&str>) -> Result<(), Error> {
         let _ = fs::remove_file(&building);
     }
     built
+}
+
+/// The prefix of the file that an index is built in, which `<time>.<pid>` follows.
+const BUILDING: &str = ".index.redb.";
+
+/// The time in the name of a file that an index is built in, which a crash left behind if it is
+/// old.
+fn building_time(name: &str) -> Option<u64> {
+    name.strip_prefix(BUILDING)?.split_once('.')?.0.parse().ok()
 }
 
 /// The outcome of an attempt to open the index read-only.

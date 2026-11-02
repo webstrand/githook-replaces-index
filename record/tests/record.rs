@@ -551,7 +551,7 @@ fn writes_beside_a_file_of_the_notes_tree_whose_path_is_not_utf8() {
 }
 
 #[test]
-fn gc_deletes_the_refs_a_pull_left_behind_once_they_are_older_than_prune_expire() {
+fn gc_deletes_what_ended_processes_left_behind_once_it_is_older_than_prune_expire() {
     let (dir, ids) = repo(["a"]);
     let (repo, [a]) = (dir.path(), ids.each_ref());
     // Each ref is dated by its reflog, against the newest entry of the reflog of HEAD.
@@ -578,6 +578,15 @@ fn gc_deletes_the_refs_a_pull_left_behind_once_they_are_older_than_prune_expire(
     dated("refs/replaces-index/fetched-1/replaces", 15);
     dated("refs/replaces-index/fetched-2/replaces", 13);
     dated("HEAD", 0);
+    let abandoned = repo.join(".git/replaces-abandoned");
+    std::fs::create_dir_all(&abandoned).unwrap();
+    let temporary = |days_ago: u64| {
+        let time = 2_000_000_000 - days_ago * 86_400;
+        let path = abandoned.join(format!(".{time:012}.000000000-0.tmp"));
+        std::fs::write(&path, "").unwrap();
+        path
+    };
+    let (old, fresh) = (temporary(15), temporary(13));
 
     let output = isolated(repo, RECORD, &["--gc"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -592,4 +601,5 @@ fn gc_deletes_the_refs_a_pull_left_behind_once_they_are_older_than_prune_expire(
     )
     .unwrap();
     assert_eq!(left.trim(), "refs/replaces-index/fetched-2/replaces");
+    assert!(!old.exists() && fresh.exists());
 }

@@ -112,4 +112,21 @@ fn follows_the_notes_as_they_change() {
     let index = Index::open().unwrap();
     assert_eq!(index.replaced_by(&p).unwrap(), set(&[&q]));
     assert_eq!(index.replaced_by(&r).unwrap(), set(&[&s]));
+    drop(index);
+
+    // A build deletes the files that crashed builds left, once they are older than
+    // gc.pruneExpire.
+    let replaces = Path::new(".git/replaces");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (old, fresh) = (".index.redb.1.1", format!(".index.redb.{now}.1"));
+    for name in [old, &fresh] {
+        std::fs::write(replaces.join(name), "").unwrap();
+    }
+    std::fs::remove_file(replaces.join("index.redb")).unwrap();
+    drop(Index::open().unwrap());
+    assert!(!replaces.join(old).exists());
+    assert!(replaces.join(&fresh).exists());
 }

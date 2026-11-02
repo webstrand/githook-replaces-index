@@ -18,7 +18,8 @@ pub fn dir() -> Result<PathBuf, runner::Error> {
 }
 
 /// Keeps `rewrite` in a file of its own in `dir`, and returns its path. The file is written under
-/// a temporary name and renamed, so that it either holds the whole rewrite or does not exist.
+/// a temporary name and renamed, so that it either holds the whole rewrite or does not exist, and
+/// `dir` is synced, so that the rename outlasts a crash.
 pub fn keep(dir: &Path, rewrite: &Rewrite) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let name = name();
@@ -29,7 +30,16 @@ pub fn keep(dir: &Path, rewrite: &Rewrite) -> io::Result<PathBuf> {
     if kept.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    kept.map(|()| path)
+    kept?;
+    // A failure to sync leaves the record whole, as the rename made it.
+    let _ = File::open(dir).and_then(|dir| dir.sync_all());
+    Ok(path)
+}
+
+/// The time in the name of a temporary file of `keep`, which a crash left behind if it is old.
+pub fn temporary_time(name: &str) -> Option<u64> {
+    let name = name.strip_prefix('.')?.strip_suffix(".tmp")?;
+    name.split_once('.')?.0.parse().ok()
 }
 
 fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
