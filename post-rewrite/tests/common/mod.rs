@@ -1,4 +1,5 @@
-//! Scratch repositories in which the hook runs, as git runs it after each amend and rebase.
+//! Scratch repositories in which the hook runs, as git runs it after each `git commit --amend` and
+//! rebase.
 
 #![allow(dead_code)]
 
@@ -105,8 +106,8 @@ pub fn stderr_of(mut command: Command) -> String {
     stderr
 }
 
-/// A scratch repository with a commit `a` and a commit made from it as an amend makes it, without
-/// running the hook, and their ids.
+/// A scratch repository with a commit `a` and a commit made from it as `git commit --amend` makes
+/// it, without running the hook, and their ids.
 pub fn amended() -> (tempfile::TempDir, String, String) {
     let repo = repo();
     let a = commit(repo.path(), "a");
@@ -114,7 +115,7 @@ pub fn amended() -> (tempfile::TempDir, String, String) {
     (repo, a, a2)
 }
 
-/// A commit made from `commit` as an amend makes it, without running the hook.
+/// A commit made from `commit` as `git commit --amend` makes it, without running the hook.
 pub fn amend_of(repo: &Path, commit: &str) -> String {
     let parent = format!("{commit}~");
     let tree = format!("{commit}^{{tree}}");

@@ -1,5 +1,6 @@
-//! When the hook cannot keep track of the amends of a rebase, it records what it has in a cruder
-//! form, which names commits that it would otherwise leave out, rather than abandon the rewrite.
+//! When the hook cannot keep track of the deferred replacements of a rebase, it records what it has
+//! in a cruder form, which names commits that it would otherwise leave out, rather than abandon the
+//! rewrite.
 
 mod common;
 
@@ -30,8 +31,8 @@ fn rebase_onto_upstream(repo: &Path, script: &str) -> String {
     stderr_of(command)
 }
 
-/// The amends that the hook set aside during the rebase in progress.
-fn set_aside(repo: &Path) -> Vec<(String, String)> {
+/// The replacements that the hook deferred during the rebase in progress.
+fn deferred(repo: &Path) -> Vec<(String, String)> {
     let text = fs::read_to_string(repo.join(".git/rebase-merge/replaces-index-deferred")).unwrap();
     text.lines()
         .map(|line| {
@@ -47,12 +48,12 @@ fn assert_fell_back(repo: &Path, stderr: &str) {
     assert!(abandoned(repo).is_empty(), "{stderr}");
 }
 
-/// An exec line that makes the file of the amends set aside unreadable, as a directory.
-const BREAK_AMENDS: &str =
+/// An exec line that makes the file of the deferred replacements unreadable, as a directory.
+const BREAK_DEFERRED: &str =
     "exec f=$(git rev-parse --git-path rebase-merge/replaces-index-deferred); rm -f $f; mkdir $f";
 
 #[test]
-fn an_amend_that_cannot_be_set_aside_is_recorded_at_once() {
+fn a_replacement_that_cannot_be_deferred_is_recorded_at_once() {
     let (repo, a, _) = diverged();
     rebase_keeping(repo.path(), "upstream", "1s/^pick/edit/");
     let a1 = ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -70,14 +71,14 @@ fn an_amend_that_cannot_be_set_aside_is_recorded_at_once() {
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a1}")]);
     let stderr = stderr_of(git(repo.path(), &["rebase", "--continue"]));
     assert_fell_back(repo.path(), &stderr);
-    // git reports the amended commit as the one the rebase made of `a`.
+    // git reports the commit that the amend made as the one the rebase made of `a`.
     let mut expected = [format!("replaces: {a}"), format!("replaces: {a1}")];
     expected.sort();
     assert_eq!(note(repo.path(), &a2), expected, "{stderr}");
 }
 
 #[test]
-fn an_amend_during_a_rebase_whose_state_cannot_be_found_is_recorded_at_once() {
+fn a_single_commit_rewrite_during_a_rebase_whose_state_cannot_be_found_is_recorded_at_once() {
     let (repo, _, _) = diverged();
     rebase_keeping(repo.path(), "upstream", "1s/^pick/edit/");
     let a1 = ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -93,9 +94,9 @@ fn an_amend_during_a_rebase_whose_state_cannot_be_found_is_recorded_at_once() {
 }
 
 #[test]
-fn a_rebase_whose_amends_cannot_be_read_records_what_git_reported() {
+fn a_rebase_whose_deferred_replacements_cannot_be_read_records_what_git_reported() {
     let (repo, a, b) = diverged();
-    let script = format!("1s|$|\\nexec git commit -q --amend -m amended\\n{BREAK_AMENDS}|");
+    let script = format!("1s|$|\\nexec git commit -q --amend -m amended\\n{BREAK_DEFERRED}|");
     let stderr = rebase_onto_upstream(repo.path(), &script);
     let a2 = ok(repo.path(), &["rev-parse", "HEAD~"]);
     let b1 = ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -109,10 +110,10 @@ fn a_rebase_whose_amends_cannot_be_read_records_what_git_reported() {
 }
 
 #[test]
-fn a_rebase_whose_amends_cannot_be_read_abandons_what_git_reported() {
+fn a_rebase_whose_deferred_replacements_cannot_be_read_abandons_what_git_reported() {
     let (repo, a, b) = diverged();
     fs::write(notes_lock(repo.path()), "").unwrap();
-    let script = format!("1s|$|\\nexec git commit -q --amend -m amended\\n{BREAK_AMENDS}|");
+    let script = format!("1s|$|\\nexec git commit -q --amend -m amended\\n{BREAK_DEFERRED}|");
     let mut command = git(repo.path(), &["rebase", "-q", "-i", "upstream"]);
     command.env("GIT_SEQUENCE_EDITOR", format!("sed -i -e '{script}'"));
     let stderr = interrupt_waiting(command);
@@ -127,20 +128,20 @@ fn a_rebase_whose_amends_cannot_be_read_abandons_what_git_reported() {
 }
 
 /// Stops a rebase onto `upstream` after an amend of its commit of `a`, and returns that commit
-/// and the amended one.
+/// and the commit that the amend made.
 fn stopped_after_an_amend(repo: &Path) -> (String, String) {
     rebase_keeping(
         repo,
         "upstream",
         "1s/$/\\nexec git commit -q --amend -m amended\\nbreak/",
     );
-    let aside = set_aside(repo);
-    assert_eq!(aside.len(), 1);
-    aside.into_iter().next().unwrap()
+    let deferred = deferred(repo);
+    assert_eq!(deferred.len(), 1);
+    deferred.into_iter().next().unwrap()
 }
 
 #[test]
-fn a_rebase_whose_branch_cannot_be_read_records_every_amend() {
+fn a_rebase_whose_branch_cannot_be_read_records_every_deferred_replacement() {
     let (repo, a, _) = diverged();
     let (a1, a2) = stopped_after_an_amend(repo.path());
     let bin = fake_git(repo.path(), "merge-base");

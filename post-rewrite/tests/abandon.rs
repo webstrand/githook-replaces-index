@@ -62,7 +62,8 @@ fn a_held_lock_abandons_the_end_of_a_rebase() {
     let stderr = interrupt_waiting(command);
     let a2 = ok(repo.path(), &["rev-parse", "HEAD~"]);
     let b2 = ok(repo.path(), &["rev-parse", "HEAD"]);
-    // The record holds the amended commit, not the one the rebase made before the amend.
+    // The record holds the commit that the amend made, not the one the rebase made before the
+    // amend.
     assert_abandoned(
         repo.path(),
         &stderr,
@@ -146,8 +147,8 @@ fn a_notes_ref_that_is_no_commit_abandons_the_rewrite() {
     assert_abandoned(repo.path(), &stderr, &[format!("{a} {a2}")]);
 }
 
-/// Runs the hook on an amend with a git that fails on `fail`, after an amend recorded without
-/// failure when `recorded_before`, and asserts that the amend is abandoned.
+/// Runs the hook on a single-commit rewrite with a git that fails on `fail`, after a replacement
+/// recorded without failure when `recorded_before`, and asserts that the replacement is abandoned.
 fn abandons_when_git_fails(fail: &str, recorded_before: bool) {
     let (repo, a, a2) = amended();
     if recorded_before {
@@ -187,7 +188,7 @@ fn a_failed_read_of_the_notes_abandons_the_rewrite() {
 }
 
 #[test]
-fn an_amend_recorded_at_once_during_a_rebase_is_abandoned() {
+fn a_replacement_recorded_at_once_during_a_rebase_is_abandoned() {
     let repo = repo();
     let x = commit(repo.path(), "x");
     commit(repo.path(), "a");

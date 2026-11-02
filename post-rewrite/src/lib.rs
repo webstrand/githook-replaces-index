@@ -1,25 +1,27 @@
-//! Records in refs/notes/replaces the commits that an amend or a rebase made, through `record`:
-//! the note of each new commit comes to stand in place of the commit it was made from.
+//! Records in refs/notes/replaces the commits that `git commit --amend` or a rebase made, through
+//! `record`: the note of each new commit comes to stand in place of the commit it was made from.
 //!
-//! During a rebase, git reports each fixup or squash step, and each amend that an `exec` line or
-//! a stopped rebase makes, as an amend of a commit the rebase created itself. Such amends are set
-//! aside instead of recorded, and when the rebase ends, each replacement it reports is followed
+//! During a rebase, git reports each fixup or squash step, and each `git commit --amend` that an
+//! `exec` line or the operator at a stop of the rebase runs, as a single-commit rewrite, which git
+//! calls `amend`, of a commit the rebase created itself. The replacements of such rewrites are
+//! deferred instead of recorded, and when the rebase ends, each replacement it reports is followed
 //! through them to the last commit that took its place and is still on the branch, so that no
-//! commit the rebase discarded is named. An amend whose commit is no longer on the branch, because
-//! it was undone, for instance by a `git reset` back to the amended commit, is not followed. They
-//! are set aside in the rebase's state directory, which git removes when the rebase ends or is
-//! aborted. `git am` keeps its state in rebase-apply/ as well, but marks it with `applying` rather
-//! than `rebasing`, and runs no post-rewrite when it ends, so an amend while it is stopped is
-//! recorded at once.
+//! commit the rebase discarded is named. A deferred replacement whose commit is no longer on the
+//! branch, because it was undone, for instance by a `git reset` back to the rewritten commit, is
+//! not followed. The deferred replacements are kept in the rebase's state directory, which git
+//! removes when the rebase ends or is aborted. `git am` keeps its state in rebase-apply/ as well,
+//! but marks it with `applying` rather than `rebasing`, and runs no post-rewrite when it ends, so a
+//! single-commit rewrite while it is stopped is recorded at once.
 //!
-//! An amend during a rebase of a commit that was there before the rebase began, such as one that a
-//! pick kept as it was or the commit the rebase is onto, is recorded at once as well: the rebase
-//! does not report such a commit as rewritten, so nothing would lead to the amend, and a rebase
-//! that rewrites nothing else runs no post-rewrite when it ends. The exception is the commit that
-//! the rebase stopped at for an `edit`, which it names in `amend` in its state directory: the
-//! rebase reports it as replaced by the commit it finds when it goes on, kept pick or not, so its
-//! amends are set aside as well. An amend of a commit that an amend recorded at once made is
-//! recorded at once in turn, since nothing the rebase reports leads to it either.
+//! A single-commit rewrite during a rebase of a commit that was there before the rebase began, such
+//! as one that a pick kept as it was or the commit the rebase is onto, is recorded at once as well:
+//! the rebase does not report such a commit as rewritten, so nothing would lead to the
+//! replacement, and a rebase that rewrites nothing else runs no post-rewrite when it ends. The
+//! exception is the commit that the rebase stopped at for an `edit`, which it names in git's
+//! `rebase-merge/amend` file: the rebase reports it as replaced by the commit it finds when it goes
+//! on, kept pick or not, so its replacements are deferred as well. A replacement of a commit that a
+//! replacement recorded at once made is recorded at once in turn, since nothing the rebase reports
+//! leads to it either.
 
 mod error;
 
@@ -109,23 +111,24 @@ fn waiting() -> Waiting {
 #[derive(Debug)]
 pub struct Failure {
     pub error: Error,
-    /// What remains to be recorded: every commit of the rewrite that was not set aside.
+    /// What remains to be recorded: every replacement of the rewrite that was not deferred.
     pub rewrite: Rewrite,
 }
 
-/// What of `rewrite` is to be recorded now: during a rebase, the amends of commits that the rebase
-/// made are set aside, and the replacements it reports when it ends are followed through them.
+/// What of `rewrite` is to be recorded now: during a rebase, the replacements of commits that the
+/// rebase made are deferred, and the replacements it reports when it ends are followed through
+/// them.
 ///
-/// When the hook cannot keep track of the amends, it says why and records a cruder form, which
-/// names commits that it would otherwise leave out, or which leaves out amends it cannot read:
-/// each replacement it records holds all the same, and a rewrite is not lost to a failure that
-/// recording it would not meet.
+/// When the hook cannot keep track of the deferred replacements, it says why and records a cruder
+/// form, which names commits that it would otherwise leave out, or which leaves out deferred
+/// replacements it cannot read: each replacement it records holds all the same, and a rewrite is
+/// not lost to a failure that recording it would not meet.
 ///
-/// The amends are set aside while `outstanding` is locked, and it is made to hold what remains
-/// before it is let go of, so that a thread that ends the process keeps each amend either as git
-/// reported it or set aside, and never both. When the rebase ends, `outstanding` holds the cruder
-/// form while the replacements are followed, so that a thread that ends the process meanwhile
-/// keeps every amend set aside as well.
+/// The replacements are deferred while `outstanding` is locked, and it is made to hold what
+/// remains before it is let go of, so that a thread that ends the process keeps each replacement
+/// either as git reported it or deferred, and never both. When the rebase ends, `outstanding`
+/// holds the cruder form while the replacements are followed, so that a thread that ends the
+/// process meanwhile keeps every deferred replacement as well.
 fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>>) -> Rewrite {
     if kind == Kind::FilterRepo {
         return rewrite;
@@ -148,9 +151,9 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
                 );
                 String::new()
             });
-            // The commits that amends recorded at once made: nothing that the rebase reports
-            // leads to them either, so their own amends are recorded at once as well, at the cost
-            // of naming the commit between.
+            // The commits that replacements recorded at once made: nothing that the rebase reports
+            // leads to them either, so their own replacements are recorded at once as well, at
+            // the cost of naming the commit between.
             let made_at_once: HashSet<String> = match Replacements::read(&state.join(AT_ONCE)) {
                 Ok(at_once) => at_once.made.into_iter().map(|(_, new)| new).collect(),
                 Err(err) => {
@@ -197,7 +200,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
             };
             // Kept, should a signal end the hook before the replacements are followed, as the
             // cruder form that a failure to follow them records: once a signal arrives, no git
-            // command runs to tell which amends to follow.
+            // command runs to tell which deferred replacements to follow.
             let mut crude = rewrite.clone();
             crude.replacements.extend(deferred.made.iter().cloned());
             *outstanding
@@ -228,7 +231,8 @@ fn tell(message: impl std::fmt::Display) {
 /// The file of the rebase's state directory in which the hook keeps the deferred replacements.
 const DEFERRED: &str = "replaces-index-deferred";
 
-/// The file of the rebase's state directory in which the hook keeps the amends it recorded at once.
+/// The file of the rebase's state directory in which the hook keeps the replacements of
+/// single-commit rewrites that it recorded at once.
 const AT_ONCE: &str = "replaces-index-at-once";
 
 /// The state directory of the rebase in progress, if any.
@@ -268,8 +272,9 @@ fn before_rebase(state: &Path, commit: &str) -> Result<bool, Error> {
     Ok(newer.trim().is_empty())
 }
 
-/// The commit that the rebase whose state is in `state` stopped at for an `edit`, which it reports
-/// as replaced by the commit it finds when it goes on; empty when it did not stop for one.
+/// The commit that the rebase whose state is in `state` stopped at for an `edit`, which git names
+/// in its `rebase-merge/amend` file and reports as replaced by the commit it finds when it goes
+/// on; empty when it did not stop for one.
 fn edited(state: &Path) -> Result<String, Error> {
     let path = state.join("amend");
     match fs::read_to_string(&path) {
@@ -304,12 +309,12 @@ fn append(path: &Path, replacements: &[(String, String)]) -> Result<(), Error> {
     file.write_all(lines.as_bytes()).map_err(to_error)
 }
 
-/// The amends set aside during a rebase: each commit amended, with the commit that replaced it
-/// last.
+/// The replacements kept in a file of the rebase's state directory, the deferred ones or those
+/// recorded at once: each rewritten commit, with the commit that its last replacement made.
 #[derive(Default)]
 struct Replacements {
     last: HashMap<String, String>,
-    /// Every amend, in the order it was made.
+    /// Every replacement, in the order it was made.
     made: Vec<(String, String)>,
 }
 
@@ -326,7 +331,7 @@ impl Replacements {
             }
         };
         let made = Rewrite::parse(&text).replacements;
-        // A commit amended twice is replaced by the later amend.
+        // A commit rewritten twice is replaced by the commit that the later rewrite made.
         let last = made.iter().cloned().collect();
         Ok(Self { last, made })
     }
@@ -344,17 +349,18 @@ impl Replacements {
         Ok(followed)
     }
 
-    /// The commit that finally took the place of `commit`: the last of the chain of amends from it
-    /// that `kept` accepts, or `commit` when it accepts none. The commits between were replaced by
-    /// a later amend, and are on the branch no more than an undone amend, so only the end of the
-    /// chain tells whether it was undone.
+    /// The commit that finally took the place of `commit`: the last commit of the chain of
+    /// replacements from it that `kept` accepts, or `commit` when it accepts none. The commits
+    /// between were replaced in turn, and are on the branch no more than the commit of an undone
+    /// replacement, so only the end of the chain tells whether it was undone.
     fn last<'a>(
         &'a self,
         commit: &'a str,
         mut kept: impl FnMut(&str) -> Result<bool, Error>,
     ) -> Result<&'a str, Error> {
         let mut chain = vec![commit];
-        // The visited commits end a cycle, as an amend that made a commit again forms.
+        // The visited commits end a cycle, as a replacement that made a commit again
+        // forms.
         let mut visited = HashSet::from([commit]);
         let mut at = commit;
         while let Some(next) = self.last.get(at) {

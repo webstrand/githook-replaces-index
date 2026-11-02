@@ -1,11 +1,12 @@
-//! Runs the hook in a scratch repository, as git runs it after each amend and rebase.
+//! Runs the hook in a scratch repository, as git runs it after each `git commit --amend` and
+//! rebase.
 
 mod common;
 
 use common::{commit, note, ok, rebase, rebase_keeping, refuse_unchecked_writes, repo};
 
 #[test]
-fn an_amend_stands_in_place_of_the_amended_commit() {
+fn the_commit_an_amend_makes_stands_in_place_of_the_commit_it_rewrote() {
     let repo = repo();
     let a = commit(repo.path(), "a");
     ok(
@@ -140,7 +141,7 @@ fn every_write_moves_the_ref_from_the_commit_it_read() {
     commit(repo.path(), "b");
     rebase(repo.path(), "HEAD~2", "2s/^pick/fixup/");
     let head = ok(repo.path(), &["rev-parse", "HEAD"]);
-    // `a`, its two amends, and `b`.
+    // `a`, the two commits that amends made of it, and `b`.
     assert_eq!(note(repo.path(), &head).len(), 4);
 }
 
@@ -157,7 +158,8 @@ fn a_rebase_follows_two_amends_during_it() {
     rebase(repo.path(), "upstream", script);
     let a3 = ok(repo.path(), &["rev-parse", "HEAD"]);
     assert_eq!(note(repo.path(), &a3), [format!("replaces: {a}")]);
-    // Neither the commit the rebase made of `a` nor the first amend of it is named.
+    // Neither the commit the rebase made of `a` nor the commit that the first amend made of it is
+    // named.
     let notes = ok(repo.path(), &["notes", "--ref=replaces", "list"]);
     assert_eq!(notes.lines().count(), 1, "{notes}");
 }

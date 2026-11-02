@@ -82,17 +82,18 @@ fn a_quit_abandons_the_rewrite() {
 }
 
 #[test]
-fn a_signal_while_an_amend_is_set_aside_abandons_the_amend() {
+fn a_signal_while_a_replacement_is_deferred_abandons_the_replacement() {
     let repo = repo();
     commit(repo.path(), "a");
     ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~"]);
     commit(repo.path(), "upstream");
     ok(repo.path(), &["switch", "-q", "-"]);
-    // A stop for a break rather than an edit, whose commit the hook would set aside without asking.
+    // A stop for a break rather than an edit, whose replacement the hook would defer without
+    // asking.
     rebase_keeping(repo.path(), "upstream", "1s/$/\\nbreak/");
     let a1 = ok(repo.path(), &["rev-parse", "HEAD"]);
     let a2 = amend_of(repo.path(), &a1);
-    // The hook tells whether the amended commit was there before the rebase with rev-list.
+    // The hook tells whether the rewritten commit was there before the rebase with rev-list.
     let (child, _) = start_held(repo.path(), "amend", &format!("{a1} {a2}\n"), "rev-list");
     let output = signalled(child, "TERM");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -123,7 +124,7 @@ fn a_stop_and_a_continue_let_the_hook_record() {
 }
 
 #[test]
-fn a_signal_while_a_rebase_is_followed_keeps_every_amend() {
+fn a_signal_while_a_rebase_is_followed_keeps_every_deferred_replacement() {
     let repo = repo();
     let a = commit(repo.path(), "a");
     ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~"]);
@@ -132,12 +133,12 @@ fn a_signal_while_a_rebase_is_followed_keeps_every_amend() {
     rebase_keeping(repo.path(), "upstream", "1s/$/\\nbreak/");
     let a1 = ok(repo.path(), &["rev-parse", "HEAD"]);
     let a2 = amend_of(repo.path(), &a1);
-    // The amend is set aside, as during the rebase.
+    // The replacement is deferred, as during the rebase.
     let output = hook(repo.path(), "amend", format!("{a1} {a2}\n"), None)
         .output()
         .unwrap();
     assert!(output.status.success());
-    // The hook tells whether the amend's commit is on the branch with merge-base.
+    // The hook tells whether the commit that the replacement made is on the branch with merge-base.
     let (child, _) = start_held(repo.path(), "rebase", &format!("{a} {a1}\n"), "merge-base");
     let output = signalled(child, "TERM");
     let stderr = String::from_utf8_lossy(&output.stderr);

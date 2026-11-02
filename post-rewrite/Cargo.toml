@@ -2,7 +2,7 @@
 name = "replaces-index-post-rewrite"
 version = "0.1.0"
 edition = "2024"
-description = "Records in refs/notes/replaces the replacements that an amend or a rebase made"
+description = "Records in refs/notes/replaces the replacements that git commit --amend or a rebase made"
 license = "AGPL-3.0-only"
 publish = false
 

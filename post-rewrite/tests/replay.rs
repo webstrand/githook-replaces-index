@@ -32,8 +32,8 @@ fn names(repo: &Path) -> Vec<String> {
     names
 }
 
-/// Amends HEAD through git, which runs the hook, and returns the amended commit, the new one, and
-/// the standard error.
+/// Amends HEAD through git, which runs the hook, and returns the rewritten commit, the commit that
+/// the amend made, and the standard error.
 fn amend(repo: &Path) -> (String, String, String) {
     let old = ok(repo, &["rev-parse", "HEAD"]);
     let stderr = stderr_of(git(repo, &["commit", "-q", "--amend", "-m", "amended"]));
