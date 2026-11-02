@@ -1,6 +1,7 @@
 //! Finds the commits related to a commit by rewrites: those it was made from, through any number
 //! of rewrites, and those that were made from it, together with the refs of the clone that hold
-//! each. Which of them replaces which holds only between two chains, and is left to the reader:
+//! each. Which of them replaces which holds only between two chains, and is left to the caller,
+//! such as `compare`, which compares two chains:
 //! a commit that a rewrite was made from may still be on a branch of its own.
 //!
 //! A commit that the clone lacks may be given by any prefix of its id that names exactly one

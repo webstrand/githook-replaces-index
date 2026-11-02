@@ -43,7 +43,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
     stdout
 }
 
-/// Writes a note on `commit` directly, as `record` would have.
+/// Writes `text` as the note at path `commit` in a new commit on the notes ref, without git notes.
 fn note_add(repo: &Path, commit: &str, text: &str) {
     let blob = {
         let mut child = isolated(repo, "git", &["hash-object", "-w", "--stdin"])

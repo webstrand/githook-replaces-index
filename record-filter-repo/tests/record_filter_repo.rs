@@ -43,7 +43,7 @@ fn note(repo: &Path, commit: &str) -> String {
     run(repo, "git", &["notes", "--ref=replaces", "show", commit]).1
 }
 
-/// Makes an empty commit, as filter-repo makes the commits it maps to, and returns its id.
+/// Makes an empty commit that stands for one that filter-repo made, and returns its id.
 fn commit(repo: &Path, message: &str) -> String {
     let (ok, _, stderr) = run(
         repo,

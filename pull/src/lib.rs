@@ -1,8 +1,8 @@
 //! Pulls a remote's replaces notes: fetches its refs/notes/replaces into the ref that the remote's
-//! fetch refspecs give, and merges that into the local ref as `record` writes it,
-//! taking the union of each note's lines and moving the ref only from the commit it read. Lines are
-//! only ever added to the notes, so the union is the whole merge. The remote is not changed; it
-//! pulls from this clone in turn.
+//! fetch refspecs give, and merges that into the local ref as `record` writes it, taking the union
+//! of each note's lines and moving the ref only from the commit it read. Lines are only ever added
+//! to the notes, so the union is the whole merge. The remote is not changed; it pulls from this
+//! clone in turn.
 
 mod error;
 
@@ -144,9 +144,9 @@ fn fetch_and_merge(remote: &str, theirs: &str, mut fetch: Command) -> Result<Pul
         remote: remote.to_owned(),
         source,
     })?;
-    // `<flag> <old> <new> <ref>` for each ref that the fetch matched, up to date or not, so that
-    // a remote without notes gives no line for them; the flag of a fast-forward is a space. The
-    // commit fetched is taken from the line, so that another fetch that moves the ref in the
+    // `<flag> <old> <new> <ref>` for each ref that the fetch matched, up to date or not; a
+    // remote without notes therefore gives no line for them; the flag of a fast-forward is a space.
+    // The commit fetched is taken from the line, so that another fetch that moves the ref in the
     // meantime does not change what is merged.
     let fetched = out.lines().find_map(|line| {
         let (flag, rest) = (line.get(..1)?, line.get(2..)?);

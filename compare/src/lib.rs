@@ -39,8 +39,8 @@ pub fn compare(old: &str, new: &str) -> Result<Vec<Entry>, Error> {
     let new = resolve(new)?;
     let commits = runner::stdout(&mut git(["rev-list", "--reverse", &old, "--not", &new]))
         .map_err(Error::List)?;
-    // What each was made into and from, read before git runs, so that other processes may open
-    // the index meanwhile.
+    // What each was made into and from, read, and the index closed, before `held` runs git, so
+    // that other processes may open the index meanwhile.
     let index = Index::open().map_err(Error::Index)?;
     let related = commits
         .lines()

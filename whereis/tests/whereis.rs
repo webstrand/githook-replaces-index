@@ -62,8 +62,7 @@ fn lists_a_rewritten_commit_beside_the_commits_made_from_it() {
     git(repo, &["checkout", "-q", "--detach"]);
     let a3 = commit(repo, "a''");
     let ref_arg = "--ref=replaces";
-    // `a` was rebased onto `mine` as `a'`, which was amended into `a''`, on no branch; `a` stays on
-    // `theirs`.
+    // `a'` was made from `a` on `mine`, and `a''` from `a'` on no branch; `a` stays on `theirs`.
     git(
         repo,
         &[

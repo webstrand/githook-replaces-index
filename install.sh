@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Installs the replaces index into the repository this is run from: cargo install
-# puts the programs in bin/ in its common git directory, the repository's config
+# Installs the replaces index into the repository this is run from. cargo install
+# puts the programs in bin/ in its common git directory. The repository's config
 # registers the post-rewrite hook, so that it runs beside any other post-rewrite
 # hooks, and defines the aliases `git whereis`, `git pull-replaces`,
-# `git compare-replaces`, `git rebase-replaces` and `git gc-replaces`; the
-# skill is linked into
-# .claude/skills/ of the checkout. The commands find the git directory each time
-# they run, so the repository may move. Running this again updates them. It needs
-# no more than the bash 3.2 and the tools that macOS ships.
+# `git compare-replaces`, `git rebase-replaces` and `git gc-replaces`. The skill
+# is linked into .claude/skills/ of the checkout. The commands find the git
+# directory each time they run, so the repository may move. Running this again
+# updates them. It needs no more than bash 3.2 and the tools that macOS ships.
 set -euo pipefail
 IFS=$'\n\t'
 if [ -n "$(git rev-parse --show-superproject-working-tree)" ] && [ "${INSTALL_SUBMODULE:-}" != 1 ]; then
