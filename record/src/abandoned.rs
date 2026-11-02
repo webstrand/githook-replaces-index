@@ -102,7 +102,9 @@ impl Waiting {
 
 /// The abandoned records in `dir`, oldest first. A file whose name begins with `.` is one being
 /// written, and is left alone. Lines that are no replacement, and replacements whose new commit
-/// the clone lacks, which could never be recorded, are left out.
+/// the clone lacks, which could never be recorded, are left out. A record that cannot be read, as
+/// a directory or a file without read permission, is left out where it is, so that it keeps no
+/// other record from being recorded.
 pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
     let to_error = |source| Error::Abandoned {
         path: dir.to_owned(),
@@ -114,6 +116,8 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
         Err(err) => return Err(to_error(err)),
     };
     let mut names = Vec::new();
+    // TODO: a record whose name or contents are not UTF-8 is not read: the one is passed over
+    // unannounced, and the other left out as a record that cannot be read.
     for entry in entries {
         let name = entry.map_err(to_error)?.file_name();
         if let Some(name) = name.to_str().filter(|name| !name.starts_with('.')) {
@@ -128,7 +132,12 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
             Ok(text) => text,
             // Another process recorded it and removed it in the meantime.
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(Error::Abandoned { path, source }),
+            Err(err) => {
+                waiting
+                    .dropped
+                    .push(format!("{} could not be read: {err}", path.display()));
+                continue;
+            }
         };
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let words: Vec<&str> = line.split_whitespace().collect();

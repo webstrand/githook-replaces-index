@@ -233,3 +233,21 @@ fn the_main_checkout_records_what_a_worktree_abandoned() {
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
     assert!(names(repo.path()).is_empty());
 }
+
+#[test]
+fn a_record_that_cannot_be_read_is_left_where_it_is() {
+    let (repo, a, a2) = amended();
+    let dir = repo.path().join(".git/replaces-abandoned");
+    fs::create_dir_all(dir.join("000000000001.000000000-0")).unwrap();
+    keep(
+        repo.path(),
+        "000000000002.000000000-0",
+        &format!("{a} {a2}\n"),
+    );
+    let output = hook(repo.path(), "amend", "", None).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("could not be read"), "{stderr}");
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+    assert_eq!(names(repo.path()), ["000000000001.000000000-0"]);
+}
