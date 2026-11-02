@@ -11,6 +11,7 @@
 
 use std::fmt::Display;
 use std::io::{self, Read, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::{self, ExitCode};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -44,6 +45,8 @@ enum Event {
     Signal(i32),
     /// The rewrite was recorded, or could not be.
     Done(Result<(), Failure>),
+    /// Recording panicked, which the panic hook has said; what remains is in `outstanding`.
+    Panicked,
     /// The abandoned record was written, or could not be; nothing when there was none to write.
     Kept(Option<Result<PathBuf, String>>),
 }
@@ -75,10 +78,7 @@ fn main() -> ExitCode {
     {
         let events = events.clone();
         let outstanding = Arc::clone(&outstanding);
-        thread::spawn(move || {
-            let result = post_rewrite(cli.kind, &input, &outstanding);
-            let _ = events.send(Event::Done(result));
-        });
+        spawn_recording(events, move || post_rewrite(cli.kind, &input, &outstanding));
     }
     let hook = Hook {
         events,
@@ -113,6 +113,16 @@ fn main() -> ExitCode {
                     (None, _) => ExitCode::FAILURE,
                 };
             }
+            Event::Panicked => {
+                let rewrite = outstanding
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                return match hook.abandon(rewrite, None) {
+                    (Some(signal), _) => die(signal),
+                    (None, _) => ExitCode::FAILURE,
+                };
+            }
             Event::Signal(signal) => {
                 runner::stop();
                 let rewrite = outstanding
@@ -125,6 +135,21 @@ fn main() -> ExitCode {
             Event::Kept(_) => {}
         }
     }
+}
+
+/// Runs `record` on a thread of its own, and sends what became of it to `events`. A panic is sent
+/// as well, since the hook would otherwise wait for it for ever.
+fn spawn_recording(
+    events: Sender<Event>,
+    record: impl FnOnce() -> Result<(), Failure> + Send + 'static,
+) {
+    thread::spawn(move || {
+        let event = match panic::catch_unwind(AssertUnwindSafe(record)) {
+            Ok(result) => Event::Done(result),
+            Err(_) => Event::Panicked,
+        };
+        let _ = events.send(event);
+    });
 }
 
 /// The events that the hook waits for, and how it keeps a rewrite.
@@ -205,7 +230,7 @@ impl Hook {
                     print_command(reason, rewrite.as_ref());
                     return (signal, Ending::GaveUp);
                 }
-                Ok(Event::Done(_)) => {}
+                Ok(Event::Done(_) | Event::Panicked) => {}
                 Err(_) => {
                     let reason = "could not be kept (it was not written within 60s)";
                     print_command(reason, rewrite.as_ref());
@@ -312,6 +337,15 @@ mod tests {
             Ok(PathBuf::from("record"))
         });
         assert_eq!(hook.abandon(rewrite(), None), (None, Ending::Kept));
+    }
+
+    #[test]
+    fn a_panic_while_recording_is_sent() {
+        let (events, received) = mpsc::channel();
+        spawn_recording(events.clone(), || panic!("recording failed"));
+        let event = received.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(matches!(event, Event::Panicked));
+        drop(events);
     }
 
     #[test]

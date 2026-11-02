@@ -82,7 +82,7 @@ The lines a note inherits are a copy, for reading one note alone. A clone may re
 
 ## Abandoned rewrites
 
-Git passes a rewrite to `post-rewrite` once only. When the hook cannot record it, for instance because the notes ref is not a commit, its lock was left behind, git refuses to move it for another reason than a lock, or `git fast-import` failed, it keeps the replacements that remained to be recorded as an abandoned record, and prints the error and a command that records them by hand:
+Git passes a rewrite to `post-rewrite` once only. When the hook cannot record it, for instance because the notes ref is not a commit, its lock was left behind, git refuses to move it for another reason than a lock, `git fast-import` failed, or the hook panicked, it keeps the replacements that remained to be recorded as an abandoned record, and prints the error and a command that records them by hand:
 
 ```
 replaces-index: <error>
