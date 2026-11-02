@@ -136,24 +136,11 @@ pub fn record_then(rewrite: &Rewrite, written: impl FnOnce()) -> Result<(), Erro
         .iter()
         .map(|(_, new)| new.as_str())
         .collect();
-    if let Some(missing) = not_commits(&news)?.into_iter().next() {
-        return Err(Error::NotInClone(missing));
+    let commits = runner::commits(news.iter().copied()).map_err(Error::Read)?;
+    if let Some(missing) = news.into_iter().find(|new| !commits.contains(*new)) {
+        return Err(Error::NotInClone(missing.to_owned()));
     }
     write(Change::Rewrite(rewrite), written)
-}
-
-/// Those of `ids` that name no commit of the clone, by one `git cat-file`.
-fn not_commits(ids: &BTreeSet<&str>) -> Result<Vec<String>, Error> {
-    let input: String = ids.iter().map(|id| format!("{id}\n")).collect();
-    let mut check = git(["cat-file", "--batch-check=%(objectname) %(objecttype)"]);
-    let out = runner::stdout_with_input(&mut check, input.as_bytes()).map_err(Error::Read)?;
-    // Each line is `<id> <type>`, or `<id> missing`.
-    Ok(out
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .filter(|(_, kind)| *kind != "commit")
-        .map(|(id, _)| id.to_owned())
-        .collect())
 }
 
 /// Whether `word` is the full id of an object of this repository, as git writes it: lowercase hex
@@ -410,13 +397,7 @@ fn refused(parent: Option<&str>, err: runner::Error) -> Result<Attempt, Error> {
 
 /// Whether commit `ancestor` is `descendant` or one of its ancestors.
 fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
-    let mut command = git(["merge-base", "--is-ancestor", ancestor, descendant]);
-    let output = runner::run(&mut command).map_err(Error::Read)?;
-    if output.status.code() == Some(1) {
-        return Ok(false);
-    }
-    runner::check(&command, &output).map_err(Error::Read)?;
-    Ok(true)
+    runner::is_ancestor(ancestor, descendant).map_err(Error::Read)
 }
 
 /// The notes that a writer writes: by the commit they annotate, which the clone has, with the

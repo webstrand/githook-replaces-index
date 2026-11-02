@@ -1,7 +1,6 @@
 //! Rewrites that could not be recorded, each kept as a file of `<old> <new>` lines in
 //! `replaces-abandoned/` in the common git directory, so that they may be recorded later.
 
-use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -161,9 +160,9 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
         .iter()
         .map(|(_, new)| new.as_str())
         .collect();
-    let missing = missing(&news).map_err(Error::Read)?;
+    let commits = runner::commits(news).map_err(Error::Read)?;
     waiting.rewrite.replacements.retain(|(old, new)| {
-        let kept = !missing.contains(new);
+        let kept = commits.contains(new);
         if !kept {
             waiting.dropped.push(format!(
                 "{new} is not in this clone, so `{old} {new}` cannot be recorded"
@@ -172,28 +171,6 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
         kept
     });
     Ok(waiting)
-}
-
-/// Those of `ids` that name no commit of the repository.
-fn missing(ids: &[&str]) -> Result<HashSet<String>, runner::Error> {
-    if ids.is_empty() {
-        return Ok(HashSet::new());
-    }
-    let input: String = ids.iter().map(|id| format!("{id}\n")).collect();
-    let mut command = runner::git(["cat-file", "--batch-check=%(objectname) %(objecttype)"]);
-    let out = runner::stdout_with_input(&mut command, input.as_bytes())?;
-    // Each line is `<id> <type>`, or `<id> missing`.
-    let found: HashSet<&str> = out
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .filter(|(_, kind)| *kind == "commit")
-        .map(|(id, _)| id)
-        .collect();
-    Ok(ids
-        .iter()
-        .filter(|id| !found.contains(*id))
-        .map(|id| (*id).to_owned())
-        .collect())
 }
 
 #[cfg(test)]

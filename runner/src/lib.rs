@@ -1,5 +1,6 @@
 //! Runs git for the replaces-index programs, and reports its failures.
 
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStringExt;
@@ -171,6 +172,34 @@ pub fn stdout_bytes(command: &mut Command) -> Result<Vec<u8>, Error> {
     let output = run(command)?;
     check(command, &output)?;
     Ok(output.stdout)
+}
+
+/// Those of the full ids `ids` that name a commit of the repository, by one `git cat-file`.
+pub fn commits<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<HashSet<String>, Error> {
+    let input: String = ids.into_iter().map(|id| format!("{id}\n")).collect();
+    if input.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut check = git(["cat-file", "--batch-check=%(objectname) %(objecttype)"]);
+    let out = stdout_with_input(&mut check, input.as_bytes())?;
+    // Each line is `<id> <type>`, or `<id> missing`.
+    Ok(out
+        .lines()
+        .filter_map(|line| line.strip_suffix(" commit"))
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Whether commit `ancestor` is `descendant` or one of its ancestors; a failure when git cannot
+/// tell, as for a commit the repository lacks.
+pub fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
+    let mut command = git(["merge-base", "--is-ancestor", ancestor, descendant]);
+    let output = run(&mut command)?;
+    if output.status.code() == Some(1) {
+        return Ok(false);
+    }
+    check(&command, &output)?;
+    Ok(true)
 }
 
 /// Runs a command for its effect.

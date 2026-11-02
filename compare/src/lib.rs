@@ -143,14 +143,7 @@ fn held<'a>(
     if commits.is_empty() {
         return Ok(HashSet::new());
     }
-    let input: String = commits.iter().map(|c| format!("{c}\n")).collect();
-    let mut check = git(["cat-file", "--batch-check=%(objectname) %(objecttype)"]);
-    // Each line is `<id> <type>`, or `<id> missing`.
-    let types = runner::stdout_with_input(&mut check, input.as_bytes()).map_err(error)?;
-    let present: Vec<&str> = types
-        .lines()
-        .filter_map(|line| line.strip_suffix(" commit"))
-        .collect();
+    let present = runner::commits(commits).map_err(error)?;
     if present.is_empty() {
         return Ok(HashSet::new());
     }
@@ -161,7 +154,6 @@ fn held<'a>(
     let apart: HashSet<&str> = apart.lines().collect();
     Ok(present
         .into_iter()
-        .filter(|c| !apart.contains(c))
-        .map(str::to_owned)
+        .filter(|c| !apart.contains(c.as_str()))
         .collect())
 }

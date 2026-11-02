@@ -278,13 +278,7 @@ fn edited(state: &Path) -> Result<String, Error> {
 
 /// Whether `commit` is HEAD or one of its ancestors.
 fn on_branch(commit: &str) -> Result<bool, Error> {
-    let mut command = runner::git(["merge-base", "--is-ancestor", commit, "HEAD"]);
-    let output = runner::run(&mut command).map_err(Error::Branch)?;
-    if output.status.code() == Some(1) {
-        return Ok(false);
-    }
-    runner::check(&command, &output).map_err(Error::Branch)?;
-    Ok(true)
+    runner::is_ancestor(commit, "HEAD").map_err(Error::Branch)
 }
 
 /// Adds `amends` to those set aside in `path`.

@@ -205,17 +205,15 @@ fn open_current(path: &std::path::Path, notes: Option<&str>) -> Result<Opened, E
     })
 }
 
-/// Whether the notes commit `ancestor` is `descendant` or one of its ancestors; not when git
-/// cannot tell, as for a commit the clone no longer has, which indexes the notes anew.
+/// Whether the notes commit `ancestor` is `descendant` or one of its ancestors; not when the clone
+/// no longer has either, as once garbage collection removed a notes commit indexed, which indexes
+/// the notes anew. Any other failure of git is one.
 fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
-    let output = runner::run(&mut git([
-        "merge-base",
-        "--is-ancestor",
-        ancestor,
-        descendant,
-    ]))
-    .map_err(Error::Notes)?;
-    Ok(output.status.success())
+    let present = runner::commits([ancestor, descendant]).map_err(Error::Notes)?;
+    if !present.contains(ancestor) || !present.contains(descendant) {
+        return Ok(false);
+    }
+    runner::is_ancestor(ancestor, descendant).map_err(Error::Notes)
 }
 
 /// The notes commit that `db` was built from, if any.
