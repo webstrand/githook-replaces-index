@@ -56,13 +56,10 @@ impl Refspec {
 }
 
 /// What the `*` of `pattern` stands for in `name`, or `""` for a pattern without one that is
-/// `name`; none when `pattern` does not match `name`. A `*` stands for one character at least.
+/// `name`; none when `pattern` does not match `name`. A `*` may stand for nothing, as git takes it.
 fn matched<'a>(pattern: &str, name: &'a str) -> Option<&'a str> {
     match pattern.split_once('*') {
-        Some((before, after)) => {
-            let star = name.strip_prefix(before)?.strip_suffix(after)?;
-            (!star.is_empty()).then_some(star)
-        }
+        Some((before, after)) => name.strip_prefix(before)?.strip_suffix(after),
         None => (pattern == name).then_some(""),
     }
 }
@@ -141,11 +138,23 @@ mod tests {
     }
 
     #[test]
-    fn a_star_stands_for_one_character_at_least() {
-        assert_eq!(matched("refs/remotes/*", "refs/remotes/"), None);
+    fn a_star_may_stand_for_nothing() {
+        assert_eq!(
+            matched("refs/notes/replaces*", "refs/notes/replaces"),
+            Some("")
+        );
         assert_eq!(
             matched("refs/remotes/*", "refs/remotes/o/main"),
             Some("o/main")
+        );
+    }
+
+    #[test]
+    fn a_glob_that_ends_at_the_ref_forces_it() {
+        let refspec = Refspec::parse("origin", "+refs/notes/replaces*:refs/notes/replaces*");
+        assert_eq!(
+            refspec.source_of("refs/notes/replaces").as_deref(),
+            Some("refs/notes/replaces")
         );
     }
 }
