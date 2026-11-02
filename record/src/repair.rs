@@ -245,8 +245,8 @@ pub fn warn_forcing(prefix: &str) {
                     "{prefix}: remote.{}.fetch {} replaces {REF} on each fetch, dropping what this clone recorded since; to keep {REF} out of it: git config --add {} {}",
                     refspec.remote,
                     refspec.text,
-                    shell_quote(&format!("remote.{}.fetch", refspec.remote)),
-                    shell_quote(&format!("^{src}"))
+                    runner::quote(format!("remote.{}.fetch", refspec.remote).as_ref()).display(),
+                    runner::quote(format!("^{src}").as_ref()).display()
                 );
             }
         }
@@ -254,11 +254,6 @@ pub fn warn_forcing(prefix: &str) {
             let _ = writeln!(stderr, "{prefix}: could not read the fetch refspecs: {err}");
         }
     }
-}
-
-/// `word` as the shell reads it back.
-fn shell_quote(word: &str) -> String {
-    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 /// Repairs the notes, and says on standard error, after `prefix`, what the repair put back, or

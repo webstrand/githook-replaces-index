@@ -26,9 +26,9 @@
 mod error;
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -194,9 +194,9 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
     })?;
     let exe = std::env::current_exe().map_err(Error::CurrentExe)?;
     // Git runs the editor through the shell, with the path of the todo list appended.
-    let mut editor = quote(exe.as_os_str());
+    let mut editor = runner::quote(exe.as_os_str());
     editor.push(" --edit-todo ");
-    editor.push(quote(drop_path.as_os_str()));
+    editor.push(runner::quote(drop_path.as_os_str()));
     let status = git(["rebase", "-i", "--no-autosquash", &onto])
         .env("GIT_SEQUENCE_EDITOR", editor)
         .status()
@@ -327,9 +327,9 @@ fn edit_todo(drop: &Path, todo: &Path) -> Result<(), Error> {
             source,
         })?;
         edited.extend_from_slice(b"exec ");
-        edited.extend_from_slice(quote(exe.as_os_str()).as_bytes());
+        edited.extend_from_slice(runner::quote(exe.as_os_str()).as_bytes());
         edited.extend_from_slice(format!(" --reword {id} ").as_bytes());
-        edited.extend_from_slice(quote(path.as_os_str()).as_bytes());
+        edited.extend_from_slice(runner::quote(path.as_os_str()).as_bytes());
         edited.push(b'\n');
     }
     let new = todo.with_extension("new");
@@ -488,18 +488,4 @@ fn resolve<'a>(names: &[&'a str]) -> Result<HashMap<&'a str, String>, Error> {
         .filter(|(_, line)| !line.contains(' '))
         .map(|(name, id)| (*name, id.to_owned()))
         .collect())
-}
-
-/// A word that the shell reads back as `word`, whatever its bytes.
-fn quote(word: &OsStr) -> OsString {
-    let mut quoted = vec![b'\''];
-    for &byte in word.as_bytes() {
-        if byte == b'\'' {
-            quoted.extend_from_slice(br"'\''");
-        } else {
-            quoted.push(byte);
-        }
-    }
-    quoted.push(b'\'');
-    OsString::from_vec(quoted)
 }

@@ -5,7 +5,7 @@ pub mod refspec;
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
-use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::Mutex;
@@ -25,6 +25,20 @@ pub enum Error {
         status: ExitStatus,
         stderr: String,
     },
+}
+
+/// A word that the shell reads back as `word`, whatever its bytes.
+pub fn quote(word: &OsStr) -> OsString {
+    let mut quoted = vec![b'\''];
+    for &byte in word.as_bytes() {
+        if byte == b'\'' {
+            quoted.extend_from_slice(br"'\''");
+        } else {
+            quoted.push(byte);
+        }
+    }
+    quoted.push(b'\'');
+    OsString::from_vec(quoted)
 }
 
 fn stderr_suffix(stderr: &str) -> String {
