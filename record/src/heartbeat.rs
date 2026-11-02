@@ -19,6 +19,7 @@ pub fn line(elapsed: Duration, stop: &str) -> String {
             let why = match retry {
                 Retry::Moved => "keeps moving",
                 Retry::Locked => "is locked",
+                Retry::Refused => "was refused",
             };
             let line = format!(
                 "{REF} {why}, retrying (attempt {}, {seconds}s; {stop})",

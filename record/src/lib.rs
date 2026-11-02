@@ -256,7 +256,7 @@ fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
                 if refusals == REFUSALS {
                     return Err(Error::Write(err));
                 }
-                Retry::Locked
+                Retry::Refused
             }
         };
         {
@@ -299,6 +299,8 @@ pub enum Retry {
     Moved,
     /// Another process held the lock of the ref.
     Locked,
+    /// Git refused to move the ref, with no lock in sight.
+    Refused,
 }
 
 static PROGRESS: Mutex<Progress> = Mutex::new(Progress {

@@ -55,6 +55,7 @@ Once the hook has run for a second, it prints what it waits for every second, un
 replaces-index: waiting for git fast-import --quiet (3s; Ctrl-C to abandon)
 replaces-index: refs/notes/replaces is locked, retrying (attempt 14, 5s; Ctrl-C to abandon)
 replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; Ctrl-C to abandon)
+replaces-index: refs/notes/replaces was refused, retrying (attempt 2, 1s; Ctrl-C to abandon)
 ```
 
 Git holds the lock of a ref for moments only. Once `record` has watched the lock held for ten seconds, the line names it and says that it may have been left behind, as by a git ended by `SIGKILL`, which git itself then refuses to take; `record` keeps retrying until it has watched it for 30 seconds, and removing a lock that no running git holds lets the write through:
