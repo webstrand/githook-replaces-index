@@ -170,7 +170,7 @@ The refspec is a glob so that a remote without replaces notes matches nothing: a
 `git rebase-replaces [<upstream>]` rebases the current branch onto `<upstream>`, by default its configured upstream, and leaves out every commit of the branch that the upstream already holds in another form:
 
 1. When `<upstream>` is a remote-tracking branch, it fetches the remote, and its replaces notes in the same fetch, and merges them as `git pull-replaces` does.
-2. Of the commits of the branch that the upstream lacks, it leaves out each one for which `git compare-replaces HEAD <upstream>` prints a `held` line, and each one that the upstream's reflog shows it once held.
+2. Of the commits of the branch that the upstream lacks, it leaves out each one for which `git compare-replaces HEAD <upstream>` prints a `held` line, and, when no `<upstream>` is named, each one that the configured upstream's reflog shows it once held, as `git rebase` uses its fork point only when it is named no upstream either: a named upstream is taken as it is.
 3. It names each commit it leaves out, and why: the upstream commits made from it, or the upstream's reflog.
 4. It replays the others onto the upstream through `git rebase -i`, with the commits left out marked `drop` in the list.
 

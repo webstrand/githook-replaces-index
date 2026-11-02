@@ -119,14 +119,14 @@ fn leaves_out_the_commits_the_upstream_rewrote() {
 #[test]
 fn leaves_out_the_commits_the_reflog_shows() {
     let (_upstream, clone, _) = rewritten();
-    let (ok, stdout, stderr) = run(clone.path(), REBASE, &["origin/main"]);
+    let (ok, stdout, stderr) = run(clone.path(), REBASE, &[]);
     assert!(ok, "{stderr}");
     assert!(
         stdout.contains("leaving out 2 it already holds"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("the reflog of origin/main shows that it held it"),
+        stdout.contains("the reflog of @{upstream} shows that it held it"),
         "{stdout}"
     );
     assert_eq!(subjects(clone.path()), ["base", "a'", "b'", "x"]);
@@ -255,4 +255,22 @@ fn fetches_the_remote_whose_refspec_makes_the_upstream() {
             "refs/notes/remotes/origin/replaces",
         ],
     );
+}
+
+#[test]
+fn takes_a_named_upstream_as_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    commit(repo, "base", "base");
+    let x = commit(repo, "x", "x");
+    git(repo, &["branch", "feature"]);
+    // `main` drops `x`, which its reflog shows it held.
+    git(repo, &["reset", "-q", "--hard", "HEAD~"]);
+    git(repo, &["checkout", "-q", "feature"]);
+
+    let (ok, stdout, stderr) = run(repo, REBASE, &["main"]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains("leaving out 0"), "{stdout}");
+    assert_eq!(git(repo, &["rev-parse", "HEAD"]), x);
 }

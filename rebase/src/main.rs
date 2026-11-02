@@ -7,13 +7,14 @@
 //! are replayed on top of their own replacements.
 //!
 //! When <upstream> is a remote-tracking branch, its remote is fetched first, its replaces notes
-//! with it in the same fetch, and they are merged through `pull`. A commit of the branch that the upstream lacks is then left out
-//! when:
+//! with it in the same fetch, and they are merged through `pull`. A commit of the branch that the
+//! upstream lacks is then left out when:
 //!
 //! - the upstream holds a commit that was made from it, through any number of rewrites, as
 //!   `compare` finds through the index of refs/notes/replaces; or
-//! - the upstream's reflog shows that the upstream once held it, and has since dropped or
-//!   replaced it, as `git pull --rebase` would.
+//! - no <upstream> was named, and the reflog of the configured upstream shows that it once held
+//!   it, and has since dropped or replaced it, as `git rebase` does with its fork point when it is
+//!   named no upstream either.
 //!
 //! A commit that was rewritten as commits the upstream lacks is replayed, with a warning. The
 //! remaining commits are replayed onto the upstream by `git rebase -i`, with this program as its
@@ -50,7 +51,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.edit_todo.as_deref() {
         Some([drop, todo]) => edit_todo(drop, todo).map(|()| ExitCode::SUCCESS),
-        _ => rebase(cli.upstream.as_deref().unwrap_or("@{upstream}")),
+        _ => rebase(cli.upstream.as_deref()),
     };
     result.unwrap_or_else(|err| {
         eprintln!("rebase-replaces: {err}");
@@ -58,7 +59,9 @@ fn main() -> ExitCode {
     })
 }
 
-fn rebase(upstream: &str) -> Result<ExitCode, Error> {
+/// Rebases onto `upstream`, the configured upstream when none is named.
+fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
+    let upstream = named.unwrap_or("@{upstream}");
     let upstream_error = |source| Error::Upstream {
         upstream: upstream.to_owned(),
         source,
@@ -87,7 +90,11 @@ fn rebase(upstream: &str) -> Result<ExitCode, Error> {
     .trim()
     .to_owned();
 
-    let held = held(&full, &up)?;
+    // A named upstream is taken as it is, as `git rebase` takes it without a fork point.
+    let held = match named {
+        Some(_) => HashSet::new(),
+        None => held(&full, &up)?,
+    };
     let local = compare("HEAD", &up).map_err(Error::Compare)?;
     // Each commit left out, with why, and each replayed although it was rewritten, with into what.
     let mut drop: Vec<(&str, String)> = Vec::new();
