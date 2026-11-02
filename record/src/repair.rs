@@ -10,7 +10,8 @@
 //! names is the only record of what it holds, and is written back as well.
 //!
 //! The commit up to which the reflog was checked is kept in the ref `refs/replaces-index/checked`,
-//! so that each step is checked once, and so that garbage collection keeps the commit: once the
+//! with the time of its entry, so that each step is checked once, and so that garbage collection
+//! keeps the commit: once the
 //! reflog no longer holds it, the step from it to the oldest commit the reflog holds is checked
 //! as one. A clone that keeps no reflog of the notes ref, as a bare one by default, is not checked.
 
@@ -24,6 +25,10 @@ use crate::{Change, Error, Notes, REF, REPLACES, all_notes, is_id, lines, notes_
 
 /// The ref that holds the commit up to which the reflog was checked.
 const CHECKED: &str = "refs/replaces-index/checked";
+
+/// The ref that holds a blob of the time of the entry of the reflog up to which it was checked,
+/// which tells that entry from a later one that moved the ref back to the same commit.
+const CHECKED_AT: &str = "refs/replaces-index/checked-at";
 
 /// What a repair found.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -39,28 +44,44 @@ pub struct Repaired {
 /// Checks the steps of the reflog of the notes ref since the last check, and writes back the
 /// lines that any of them dropped, or adds them to the notes that name a commit the clone lacks.
 pub fn repair() -> Result<Repaired, Error> {
-    let mut read_checked = git(["rev-parse", "--verify", "--quiet", CHECKED]);
-    let output = runner::run(&mut read_checked).map_err(Error::Read)?;
-    // rev-parse --verify --quiet exits with 1 when the ref does not exist.
-    if output.status.code() != Some(1) {
-        runner::check(&read_checked, &output).map_err(Error::Read)?;
-    }
-    let checked = runner::text(&read_checked, output.stdout)
-        .map_err(Error::Read)?
-        .trim()
-        .to_owned();
-    let checked = (!checked.is_empty()).then_some(checked);
+    let checked = read_ref(CHECKED)?;
+    let checked_at: Option<u64> = match read_ref(CHECKED_AT)? {
+        Some(blob) => runner::cat_file(&[blob])
+            .map_err(Error::Read)?
+            .pop()
+            .flatten()
+            .and_then(|time| String::from_utf8(time).ok()?.trim().parse().ok()),
+        None => None,
+    };
     let Some(current) = notes_commit()? else {
         return Ok(Repaired::default());
     };
-    // The commits the ref was moved to, newest first, back to the one checked last.
-    let out =
-        runner::stdout(&mut git(["reflog", "show", "--format=%H", REF])).map_err(Error::Read)?;
+    // The commits the ref was moved to, newest first, back to the one checked last. Each entry is
+    // `<id> <ref>@{<time>}`.
+    let out = runner::stdout(&mut git([
+        "reflog",
+        "show",
+        "--date=unix",
+        "--format=%H %gd",
+        REF,
+    ]))
+    .map_err(Error::Read)?;
     let mut states: Vec<&str> = Vec::new();
+    let mut newest_at = None;
     let mut found = false;
-    for id in out.lines() {
+    for line in out.lines() {
+        let Some((id, entry)) = line.split_once(' ') else {
+            continue;
+        };
+        let at: Option<u64> = entry
+            .rsplit_once("@{")
+            .and_then(|(_, time)| time.strip_suffix('}')?.parse().ok());
+        if states.is_empty() {
+            newest_at = at;
+        }
         states.push(id);
-        if Some(id) == checked.as_deref() {
+        // A check that kept no time is that of an entry of the same commit.
+        if Some(id) == checked.as_deref() && (checked_at.is_none() || checked_at == at) {
             found = true;
             break;
         }
@@ -94,8 +115,31 @@ pub fn repair() -> Result<Repaired, Error> {
             write(Change::Add(&additions), || {})?;
         }
     }
-    runner::status(&mut git(["update-ref", CHECKED, newest])).map_err(Error::Write)?;
+    let mut update = format!("update {CHECKED} {newest}\n");
+    if let Some(at) = newest_at {
+        let blob = runner::stdout_with_input(
+            &mut git(["hash-object", "-w", "--stdin"]),
+            at.to_string().as_bytes(),
+        )
+        .map_err(Error::Write)?;
+        update.push_str(&format!("update {CHECKED_AT} {}\n", blob.trim()));
+    }
+    runner::stdout_with_input(&mut git(["update-ref", "--stdin"]), update.as_bytes())
+        .map_err(Error::Write)?;
     Ok(repaired)
+}
+
+/// The object that the ref `name` points to, if it exists.
+fn read_ref(name: &str) -> Result<Option<String>, Error> {
+    let mut rev_parse = git(["rev-parse", "--verify", "--quiet", name]);
+    let output = runner::run(&mut rev_parse).map_err(Error::Read)?;
+    // rev-parse --verify --quiet exits with 1 when the ref does not exist.
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    runner::check(&rev_parse, &output).map_err(Error::Read)?;
+    let id = runner::text(&rev_parse, output.stdout).map_err(Error::Read)?;
+    Ok(Some(id.trim().to_owned()))
 }
 
 /// Where the lines that `steps` dropped go, as lines to add by commit, and the commits whose own

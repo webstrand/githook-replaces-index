@@ -388,3 +388,29 @@ fn a_step_after_the_reflog_expired_is_checked() {
     assert!(stderr.contains("put back"), "{stderr}");
     assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
 }
+
+#[test]
+fn a_step_back_to_the_commit_checked_last_is_checked() {
+    let (repo, a, a2) = amended();
+    let repo = repo.path();
+    record(repo, &a, &a2);
+    gc(repo);
+    let checked = ok(repo, &["rev-parse", "refs/notes/replaces"]);
+    let b = commit(repo, "b");
+    let b2 = amend_of(repo, &b);
+    record(repo, &b, &b2);
+    // A writer puts the ref back to the commit checked last, a minute later, which drops the
+    // note of `b'`.
+    let later = ok(repo, &["log", "-1", "--format=%ct", "HEAD"])
+        .parse::<u64>()
+        .unwrap()
+        + 60;
+    let mut back = git(repo, &["update-ref", "refs/notes/replaces", &checked]);
+    back.env("GIT_COMMITTER_DATE", format!("@{later} +0000"));
+    ok_command(back);
+    assert!(note(repo, &b2).is_empty());
+
+    let stderr = gc(repo);
+    assert!(stderr.contains("put back"), "{stderr}");
+    assert_eq!(note(repo, &b2), [format!("replaces: {b}")]);
+}
