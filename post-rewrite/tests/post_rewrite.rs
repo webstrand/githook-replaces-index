@@ -267,6 +267,5 @@ fn names_a_file_among_the_abandoned_records_whose_name_is_not_utf8() {
         "{stderr}"
     );
     assert_eq!(note(repo.path(), &b2), [format!("replaces: {b}")]);
-    // It is left where it is.
     assert!(odd.exists());
 }

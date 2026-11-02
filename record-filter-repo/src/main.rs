@@ -63,8 +63,7 @@ fn run() -> Result<(), Error> {
         post_rewrite(Kind::FilterRepo, &replacements, &Mutex::new(None))
     })
     .map_err(|failure| Error::Record(failure.error))?;
-    // The copy is kept only once the map is recorded, so that a failed run is retried in full, and
-    // through a rename, so that a run that ends while writing it leaves the previous copy whole.
+    // The copy is kept only once the map is recorded, so that a failed run is retried in full.
     keep(&prev_path, map.as_bytes()).map_err(|source| Error::Keep {
         path: prev_path,
         source,
@@ -72,6 +71,8 @@ fn run() -> Result<(), Error> {
     Ok(())
 }
 
+/// Writes `contents` to `path` through a rename, so that a run that ends while writing it leaves
+/// the previous copy whole.
 fn keep(path: &Path, contents: &[u8]) -> io::Result<()> {
     let temporary = path.with_file_name(format!(".replaces-index-commit-map.{}", process::id()));
     let kept = write(&temporary, contents).and_then(|()| fs::rename(&temporary, path));

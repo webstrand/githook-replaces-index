@@ -35,7 +35,6 @@ fn stderr_suffix(stderr: &str) -> String {
     }
 }
 
-/// A git command with the given arguments.
 pub fn git<I, S>(args: I) -> Command
 where
     I: IntoIterator<Item = S>,

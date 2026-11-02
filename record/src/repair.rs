@@ -233,7 +233,7 @@ fn dropped(before: &str, after: &str) -> Result<Notes, Error> {
 
 /// Says on standard error, after `prefix`, which fetch refspecs move the ref whether or not it
 /// fast-forwards, as `+refs/notes/*:refs/notes/*` does, and so drop on each fetch what the clone
-/// recorded since, and how to keep the ref out of them; a failure to read them is said as well.
+/// recorded since, and how to keep the ref out of them.
 pub fn warn_forcing(prefix: &str) {
     let mut stderr = io::stderr();
     match runner::refspec::forcing(REF) {
@@ -262,8 +262,7 @@ fn shell_quote(word: &str) -> String {
 }
 
 /// Repairs the notes, and says on standard error, after `prefix`, what the repair put back, or
-/// why it could not check them; a failure to check does not stop the program. It then says which
-/// fetch refspecs would drop lines again, as `warn_forcing` does.
+/// why it could not check them; a failure to check does not stop the program.
 pub fn repair_and_say(prefix: &str) {
     warn_forcing(prefix);
     let mut stderr = io::stderr();

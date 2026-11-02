@@ -171,7 +171,6 @@ fn records_wait_while_the_rewrite_cannot_be_recorded() {
         format!("{a} {a2}\n"),
         Some(&bin),
     ));
-    // The earlier record stays as it was, and the new one holds the rewrite alone.
     assert!(earlier.exists(), "{stderr}");
     assert_eq!(
         abandoned(repo.path()),

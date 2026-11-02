@@ -99,7 +99,6 @@ fn resolve(index: &Index, name: &str) -> Result<String, Error> {
     }
 }
 
-/// Where `commit` is in this clone.
 fn held(commit: &str) -> Result<Held, Error> {
     let exists = runner::run(&mut git([
         "cat-file",

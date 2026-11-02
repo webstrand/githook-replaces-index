@@ -63,7 +63,7 @@ pub fn post_rewrite(
     let rewrite = resolve(kind, reported, outstanding);
     hold(Some(rewrite.clone()));
     // The abandoned records are recorded first, so that a rewrite that came later inherits what
-    // they record, and are removed once recorded; they stay where they are when recording fails.
+    // they record.
     let waiting = waiting();
     let mut all = waiting.rewrite.clone();
     all.replacements
@@ -277,7 +277,6 @@ fn edited(state: &Path) -> Result<String, Error> {
     }
 }
 
-/// Whether `commit` is HEAD or one of its ancestors.
 fn on_branch(commit: &str) -> Result<bool, Error> {
     runner::is_ancestor(commit, "HEAD").map_err(Error::Branch)
 }

@@ -461,7 +461,6 @@ fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
     let our_files = note_files(ours)?;
     let their_files = note_files(theirs)?;
     let depth = fanout(&our_files);
-    // Each note of theirs that differs from ours, with ours if any.
     let differing: Vec<(&str, Option<&NoteFile>, &NoteFile)> = their_files
         .iter()
         .map(|(commit, theirs)| (commit.as_str(), our_files.get(commit), theirs))
@@ -554,7 +553,6 @@ fn collect(ours: &str) -> Result<(Notes, Vec<String>, usize), Error> {
     let files = note_files(ours)?;
     let notes = all_notes(ours)?;
     let present = runner::commits(notes.keys().map(String::as_str)).map_err(Error::Read)?;
-    // The commits whose notes name each commit.
     let mut named_by: HashMap<&str, Vec<&str>> = HashMap::new();
     for (commit, note) in &notes {
         for line in note {

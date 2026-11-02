@@ -43,7 +43,6 @@ const HEARTBEAT: Duration = replaces_index_record::heartbeat::EVERY;
 
 enum Event {
     Signal(i32),
-    /// The rewrite was recorded, or could not be.
     Done(Result<(), Failure>),
     /// Recording panicked, which the panic hook has said; what remains is in `outstanding`.
     Panicked,
