@@ -236,9 +236,9 @@ fn open_current(path: &std::path::Path, notes: Option<&str>) -> Result<Opened, E
     })
 }
 
-/// Whether the notes commit `ancestor` is `descendant` or one of its ancestors; not when the clone
-/// no longer has either, as once garbage collection removed a notes commit indexed, which indexes
-/// the notes anew. Any other failure of git is one.
+/// Whether the notes commit `ancestor` is `descendant` or one of its ancestors; false when the
+/// clone lacks one of them, as once garbage collection removed an indexed notes commit, so that
+/// the notes are indexed anew. Any other failure of git is returned as an error.
 fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
     let present = runner::commits([ancestor, descendant]).map_err(Error::Notes)?;
     if !present.contains(ancestor) || !present.contains(descendant) {
