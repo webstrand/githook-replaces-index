@@ -113,7 +113,7 @@ The commit up to which the reflog was checked is kept in `replaces-checked` in t
 
 ## Index
 
-The queries read an index of the notes, kept in `replaces/index.redb` in the common git directory. Each clone builds its own and its worktrees share it; the index is never committed or pushed, and may be deleted at any time, after which the next query builds it anew. It is a redb database that holds each `replaces:` line as an edge in both directions, so that both what a commit stands in place of and what was made from it are found without reading the notes.
+The queries read an index of the notes, kept in `replaces/index.redb` in the common git directory. Each clone builds its own and its worktrees share it; the index is never committed or pushed, and may be deleted at any time, after which the next query builds it anew. A query that finds it damaged, which should never happen, says so and names the file to delete, rather than delete it unasked. It is a redb database that holds each `replaces:` line as an edge in both directions, so that both what a commit stands in place of and what was made from it are found without reading the notes.
 
 The index records the notes commit it was built from. Each query opens it, and when the notes ref has moved, whatever moved it, brings it up to date first. Since lines are only ever added to the notes, it reads only the notes that `git diff-tree` reports added or changed since the commit indexed. A notes ref that lost a note, or that does not descend from the commit indexed, is indexed anew. An index built from a notes commit that descends from the one a query read, as when another process moved the ref and brought the index up to date in the meantime, holds every line of it, and is used as it is.
 

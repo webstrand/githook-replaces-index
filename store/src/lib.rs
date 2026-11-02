@@ -149,10 +149,21 @@ impl Index {
     }
 }
 
+/// The failure `source` of the index at `path`. A file that redb cannot read as a database of its
+/// format is told apart, so that the operator learns that the index may be deleted: it should
+/// never be damaged, and is not deleted unasked.
 fn index_error(path: &std::path::Path, source: impl Into<redb::Error>) -> Error {
-    Error::Index {
-        path: path.to_owned(),
-        source: source.into(),
+    let source = source.into();
+    let path = path.to_owned();
+    match &source {
+        redb::Error::Corrupted(_) | redb::Error::UpgradeRequired(_) => {
+            Error::Damaged { path, source }
+        }
+        // As an empty file, which no database ever is.
+        redb::Error::Io(err) if err.kind() == std::io::ErrorKind::InvalidData => {
+            Error::Damaged { path, source }
+        }
+        _ => Error::Index { path, source },
     }
 }
 

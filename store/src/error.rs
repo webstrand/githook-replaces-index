@@ -14,6 +14,11 @@ pub enum Error {
     Notes(#[source] runner::Error),
     #[error("{} stayed locked by another process", .0.display())]
     Busy(PathBuf),
-    #[error("could not use the index {path}: {source}")]
+    #[error("could not use the index {}: {source}", path.display())]
     Index { path: PathBuf, source: redb::Error },
+    #[error(
+        "the index {} is damaged: {source}. It holds nothing that {REF} does not, so it may be deleted once no git whereis, compare-replaces or rebase-replaces is running, and the next of them builds it anew",
+        path.display()
+    )]
+    Damaged { path: PathBuf, source: redb::Error },
 }

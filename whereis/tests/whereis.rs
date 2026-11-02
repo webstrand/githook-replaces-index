@@ -156,3 +156,23 @@ fn builds_the_index_from_a_subdirectory_as_from_the_top() {
     assert_eq!(whereis(&sub, &a2), expected);
     assert_eq!(whereis(repo, &a2), expected);
 }
+
+#[test]
+fn says_how_to_rebuild_a_damaged_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    let a = commit(repo, "a");
+    whereis(repo, &a);
+    let index = repo.join(".git/replaces/index.redb");
+    for damage in [&b""[..], b"not a database"] {
+        std::fs::write(&index, damage).unwrap();
+        let (ok, _, stderr) = run(repo, WHEREIS, &[&a]);
+        assert!(!ok);
+        assert!(stderr.contains("is damaged"), "{stderr}");
+        assert!(stderr.contains("may be deleted"), "{stderr}");
+        assert!(index.exists());
+    }
+    std::fs::remove_file(&index).unwrap();
+    assert_eq!(whereis(repo, &a), format!("self {a} main\n"));
+}
