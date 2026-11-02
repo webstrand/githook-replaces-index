@@ -225,5 +225,8 @@ fn a_repository_whose_path_is_not_utf8_is_found() {
     ok(&repo, &["commit", "-q", "--amend", "-m", "a, amended"]);
     let a2 = ok(&repo, &["rev-parse", "HEAD"]);
     assert_eq!(note(&repo, &a2), [format!("replaces: {a}")]);
-    assert!(repo.join(".git/replaces-checked").is_file());
+    ok(
+        &repo,
+        &["rev-parse", "--verify", "refs/replaces-index/checked"],
+    );
 }

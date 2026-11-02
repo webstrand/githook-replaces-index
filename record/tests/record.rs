@@ -112,11 +112,13 @@ fn leaves_the_ref_alone_when_nothing_changes() {
     let before = git(repo, &["rev-parse", REF]);
     record(repo, &format!("{a} {b}\n"));
     assert_eq!(git(repo, &["rev-parse", REF]), before);
-    // Nothing is left beside the notes ref.
-    assert_eq!(
-        git(repo, &["for-each-ref", "refs/replaces-index/"]).as_deref(),
-        Some("")
-    );
+    // Nothing is left beside the notes ref, but the commit up to which the repair checked it.
+    let left = [
+        "for-each-ref",
+        "--exclude=refs/replaces-index/checked",
+        "refs/replaces-index/",
+    ];
+    assert_eq!(git(repo, &left).as_deref(), Some(""));
 }
 
 #[test]
@@ -490,9 +492,6 @@ fn gc_removes_the_notes_of_commits_gone_and_keeps_their_lines() {
     git(repo, &["update-ref", "refs/heads/kept", &a3]).unwrap();
     git(repo, &["reflog", "expire", "--expire=now", "--all"]).unwrap();
     git(repo, &["gc", "-q", "--prune=now"]).unwrap();
-    // A write after the reflog expired, so that the repair sees the step that gc makes.
-    let [b, b2] = ["b", "b'"].map(made);
-    record(repo, &format!("{b} {b2}\n"));
 
     let output = isolated(repo, RECORD, &["--gc"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);

@@ -9,21 +9,21 @@
 //! those of the commits made from it, so that what it recorded is kept. A note that no other
 //! names is the only record of what it holds, and is written back as well.
 //!
-//! The commit up to which the reflog was checked is kept in `replaces-checked` in the common git
-//! directory, so that each step is checked once. A clone that keeps no reflog of the notes ref,
+//! The commit up to which the reflog was checked is kept in the ref `refs/replaces-index/checked`,
+//! so that each step is checked once, and so that garbage collection keeps the commit: once the
+//! reflog no longer holds it, the step from it to the oldest commit the reflog holds is checked
+//! as one. A clone that keeps no reflog of the notes ref,
 //! as a bare one by default, is not checked.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
 
 use runner::git;
 
 use crate::{Change, Error, Notes, REF, REPLACES, all_notes, is_id, lines, notes_commit, write};
 
-/// The file of the common git directory that holds the commit up to which the reflog was checked.
-const CHECKED: &str = "replaces-checked";
+/// The ref that holds the commit up to which the reflog was checked.
+const CHECKED: &str = "refs/replaces-index/checked";
 
 /// What a repair found.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -39,17 +39,14 @@ pub struct Repaired {
 /// Checks the steps of the reflog of the notes ref since the last check, and writes back the
 /// lines that any of them dropped, or adds them to the notes that name a commit the clone lacks.
 pub fn repair() -> Result<Repaired, Error> {
-    let checked_path = checked_path()?;
-    let checked = match fs::read_to_string(&checked_path) {
-        Ok(id) => Some(id.trim().to_owned()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(source) => {
-            return Err(Error::Checked {
-                path: checked_path,
-                source,
-            });
-        }
-    };
+    let mut read_checked = git(["rev-parse", "--verify", "--quiet", CHECKED]);
+    let output = runner::run(&mut read_checked).map_err(Error::Read)?;
+    // rev-parse --verify --quiet exits with 1 when the ref does not exist.
+    if output.status.code() != Some(1) {
+        runner::check(&read_checked, &output).map_err(Error::Read)?;
+    }
+    let checked = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let checked = (!checked.is_empty()).then_some(checked);
     let Some(current) = notes_commit()? else {
         return Ok(Repaired::default());
     };
@@ -57,15 +54,22 @@ pub fn repair() -> Result<Repaired, Error> {
     let out =
         runner::stdout(&mut git(["reflog", "show", "--format=%H", REF])).map_err(Error::Read)?;
     let mut states: Vec<&str> = Vec::new();
+    let mut found = false;
     for id in out.lines() {
         states.push(id);
         if Some(id) == checked.as_deref() {
+            found = true;
             break;
         }
     }
     let Some(&newest) = states.first() else {
         return Ok(Repaired::default());
     };
+    // The steps from the commit checked last to the oldest that the reflog holds expired; they are
+    // checked as one.
+    if !found && let Some(checked) = checked.as_deref() {
+        states.push(checked);
+    }
     // The lines that each step dropped, by the commit whose note held them.
     let mut steps: Vec<(&str, &str, Notes)> = Vec::new();
     for step in states.windows(2).rev() {
@@ -87,10 +91,7 @@ pub fn repair() -> Result<Repaired, Error> {
             write(Change::Add(&additions), || {})?;
         }
     }
-    fs::write(&checked_path, format!("{newest}\n")).map_err(|source| Error::Checked {
-        path: checked_path,
-        source,
-    })?;
+    runner::status(&mut git(["update-ref", CHECKED, newest])).map_err(Error::Write)?;
     Ok(repaired)
 }
 
@@ -148,12 +149,6 @@ fn placed(
     }
     additions.retain(|_, lines| !lines.is_empty());
     Ok((additions, restored))
-}
-
-fn checked_path() -> Result<PathBuf, Error> {
-    let common = runner::rev_parse_path(&["--path-format=absolute", "--git-common-dir"])
-        .map_err(Error::Read)?;
-    Ok(common.join(CHECKED))
 }
 
 /// The lines of the notes of the notes commit `before` that the notes commit `after` lacks, by

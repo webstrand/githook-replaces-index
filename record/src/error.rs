@@ -25,11 +25,6 @@ pub enum Error {
         path: std::path::PathBuf,
         seconds: u64,
     },
-    #[error("could not read or write {path}: {source}")]
-    Checked {
-        path: std::path::PathBuf,
-        source: io::Error,
-    },
     #[error("could not read or remove the abandoned records in {path}: {source}")]
     Abandoned {
         path: std::path::PathBuf,

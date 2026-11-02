@@ -208,15 +208,17 @@ fn a_file_that_is_no_note_may_be_removed() {
     assert!(!stderr.contains("put back"), "{stderr}");
 }
 
-/// Removes from `repo` every object that no ref reaches, as garbage collection does once the
-/// reflogs expire, and then, after a rewrite is recorded, the notes of the commits removed, as
-/// `git notes prune` does. The repair sees only the steps after the oldest the reflog holds.
+/// Records a rewrite, whose repair checks the notes as they are, then removes from `repo` every
+/// object that no ref reaches, as garbage collection does once the reflogs expire, and then the
+/// notes of the commits removed, as `git notes prune` does. A line that came and went between two
+/// checks, while the reflog expired, is beyond what the repair can see.
 fn collect_and_prune(repo: &Path) {
-    ok(repo, &["reflog", "expire", "--expire=now", "--all"]);
-    ok(repo, &["gc", "-q", "--prune=now"]);
     let c = commit(repo, "c");
     let c2 = amend_of(repo, &c);
     amend(repo, &c, &c2);
+    ok(repo, &["update-ref", "refs/heads/c", &c2]);
+    ok(repo, &["reflog", "expire", "--expire=now", "--all"]);
+    ok(repo, &["gc", "-q", "--prune=now"]);
     ok(repo, &["notes", "--ref=replaces", "prune"]);
 }
 
@@ -276,4 +278,31 @@ fn the_note_of_a_commit_gone_that_no_note_names_is_put_back() {
     let stderr = amend(repo, &b, &b2);
     assert!(stderr.contains("put back"), "{stderr}");
     assert!(annotated(repo).contains(&x));
+}
+
+#[test]
+fn a_step_after_the_reflog_expired_is_checked() {
+    let (repo, a, a2) = amended();
+    let repo = repo.path();
+    amend(repo, &a, &a2);
+    // The reflog no longer holds the step that made the notes, and what checked them last is
+    // unreachable once a writer forces the ref to notes without the note of `a'`.
+    ok(repo, &["reflog", "expire", "--expire=now", "--all"]);
+    let x = commit(repo, "x");
+    let empty = ok(repo, &["mktree"]);
+    let other = ok(repo, &["commit-tree", &empty, "-m", "other notes"]);
+    let message = format!("replaces: {x}");
+    ok(repo, &["update-ref", "refs/notes/replaces", &other]);
+    ok(
+        repo,
+        &["notes", "--ref=replaces", "add", "-m", &message, &x],
+    );
+    ok(repo, &["gc", "-q", "--prune=now"]);
+    assert!(note(repo, &a2).is_empty());
+
+    let b = commit(repo, "b");
+    let b2 = amend_of(repo, &b);
+    let stderr = amend(repo, &b, &b2);
+    assert!(stderr.contains("put back"), "{stderr}");
+    assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
 }

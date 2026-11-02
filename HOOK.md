@@ -109,7 +109,7 @@ After each write, the hook, `replaces-index-record` and `git pull-replaces` chec
 replaces-index: a writer dropped lines from refs/notes/replaces when it moved it from <commit> to <commit>; they are put back
 ```
 
-The commit up to which the reflog was checked is kept in `replaces-checked` in the common git directory, so that each step is checked once; a run checks the step of its own write, and any of other writers since. A note removed with `git notes remove` is put back as well.
+The commit up to which the reflog was checked is kept in the ref `refs/replaces-index/checked`, so that each step is checked once; a run checks the step of its own write, and any of other writers since. The ref keeps the commit from garbage collection: once the reflog expired and no longer holds it, the steps from it to the oldest commit the reflog holds are checked as one, which finds what they dropped but not a line that came and went between the two. A note removed with `git notes remove` is put back as well.
 
 The note of a commit that the clone no longer has, once garbage collection removed the commit, may go, as `git notes prune` removes it. Its lines are then added to the notes that name the commit in a `replaces:` line, those of the commits made from it, which may lack some, for instance when its note arrived from another clone after they were made; what it recorded is thereby kept, and the note stays removed:
 
@@ -119,7 +119,7 @@ replaces-index: the note of <commit>, which this clone no longer has, lost lines
 
 A note of a commit that the clone lacks and that no note names is the only record of what it holds, such as one pulled from a clone whose commits were never fetched, and is written back as that of a commit the clone has.
 
-A note that a step moved to another fanout, as a writer moves every note once their number crosses a power of 256, is compared with itself by the commit it annotates, and was not dropped. A clone that keeps no reflog of the notes ref, as a bare clone does unless `core.logAllRefUpdates` says otherwise, is not checked, and neither is a step that the reflog no longer holds once it expired.
+A note that a step moved to another fanout, as a writer moves every note once their number crosses a power of 256, is compared with itself by the commit it annotates, and was not dropped. A clone that keeps no reflog of the notes ref, as a bare clone does unless `core.logAllRefUpdates` says otherwise, is not checked.
 
 Each rewrite leaves the notes of the commits it replaced, which garbage collection removes once nothing reaches them, and each note copies the lines it inherits, so that the notes of a branch rebased many times grow with every rebase. `git gc-replaces`, which the operator runs, removes the notes of the commits that the clone no longer has, in one commit on the ref, written as `record` writes. The lines of each go first to the notes of the commits the clone has that name it, directly or through other notes removed, so that nothing it recorded is lost and the repair takes the removal for one that loses nothing. A note that no such note names is the only record of what it holds, and stays. The index is built anew at the next query, without the notes removed.
 

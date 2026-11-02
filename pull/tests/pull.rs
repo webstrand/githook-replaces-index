@@ -323,7 +323,15 @@ fn merges_the_notes_of_a_url_and_keeps_no_ref_of_it() {
     assert!(ok, "{stderr}");
     assert_eq!(note(ours, &b), format!("replaces: {a}\nreplaces: {x}\n"));
     assert_eq!(
-        git(ours, &["for-each-ref", "--format=%(refname)"]),
+        git(
+            ours,
+            &[
+                "for-each-ref",
+                "--format=%(refname)",
+                // The commit up to which the repair checked the notes.
+                "--exclude=refs/replaces-index/checked",
+            ]
+        ),
         format!("{REF}\n")
     );
 }
