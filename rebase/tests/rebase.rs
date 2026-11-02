@@ -250,6 +250,29 @@ fn points_a_fixup_of_a_commit_left_out_at_its_replacement() {
 }
 
 #[test]
+fn points_a_fixup_at_its_replacement_whatever_the_todo_list_shows() {
+    let (upstream, clone, [a, b, a2, b2, _]) = rewritten_with_fixup();
+    replaced(upstream.path(), &a, &a2);
+    replaced(upstream.path(), &b, &b2);
+    git(
+        clone.path(),
+        &["config", "rebase.instructionFormat", "(%an) %s"],
+    );
+    git(
+        clone.path(),
+        &["config", "rebase.abbreviateCommands", "true"],
+    );
+
+    let (ok, stdout, stderr) = run(clone.path(), REBASE, &[]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        subjects(clone.path()),
+        ["base", "a'", "b'", "x", "fixup! b'"],
+        "{stdout}"
+    );
+}
+
+#[test]
 fn points_a_fixup_that_names_an_id_at_the_id_of_the_replacement() {
     let (upstream, clone, [a, b, a2, b2, _]) = rewritten_with_fixup();
     replaced(upstream.path(), &a, &a2);

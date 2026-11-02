@@ -294,10 +294,13 @@ fn edit_todo(drop: &Path, todo: &Path) -> Result<(), Error> {
     let picks: Vec<Option<Pick>> = text.lines().map(Pick::parse).collect();
     let names: Vec<&str> = picks.iter().flatten().map(|pick| pick.commit).collect();
     let ids = resolve(&names)?;
+    // The picks are described as well, since the todo list shows them as
+    // `rebase.instructionFormat` says.
     let named = dropped
         .keys()
         .copied()
-        .chain(dropped.values().flatten().copied());
+        .chain(dropped.values().flatten().copied())
+        .chain(ids.values().map(String::as_str));
     let described = describe(named).map_err(Error::Compare)?;
     let exe = std::env::current_exe().map_err(Error::CurrentExe)?;
     let mut edited = Vec::new();
@@ -319,7 +322,7 @@ fn edit_todo(drop: &Path, todo: &Path) -> Result<(), Error> {
         }
         edited.extend_from_slice(line.as_bytes());
         edited.push(b'\n');
-        let Some(message) = retargeted(id, pick, &dropped, &described)? else {
+        let Some(message) = retargeted(id, &dropped, &described)? else {
             continue;
         };
         reworded += 1;
@@ -351,7 +354,6 @@ fn edit_todo(drop: &Path, todo: &Path) -> Result<(), Error> {
 /// replaces.
 fn retargeted(
     id: &str,
-    pick: &Pick,
     dropped: &HashMap<&str, Option<&str>>,
     described: &HashMap<String, Described>,
 ) -> Result<Option<Vec<u8>>, Error> {
@@ -361,9 +363,13 @@ fn retargeted(
             .find_map(|prefix| subject.strip_prefix(prefix))
             .map(str::len)
     };
-    if prefixed(shown(pick.rest).split_once(' ').map_or("", |(_, s)| s)).is_none() {
+    let Some(this) = described.get(id) else {
+        return Ok(None);
+    };
+    if prefixed(&this.subject).is_none() {
         return Ok(None);
     }
+    let this = format!("{} {}", this.short, this.subject);
     let message =
         runner::stdout_bytes(&mut git(["log", "-1", "--format=%B", id])).map_err(Error::List)?;
     let end = message
@@ -400,7 +406,7 @@ fn retargeted(
     let Some(replacement) = dropped[target].and_then(|r| Some((r, described.get(r)?))) else {
         println!(
             "rebase-replaces: {} names {left_out}, which is left out, and no single commit replaces it; replaying it as it is",
-            shown(pick.rest)
+            this
         );
         return Ok(None);
     };
@@ -415,9 +421,7 @@ fn retargeted(
     }
     println!(
         "rebase-replaces: making {} name {} {}, which replaces {left_out}",
-        shown(pick.rest),
-        new.short,
-        new.subject
+        this, new.short, new.subject
     );
     let mut reworded = message[..end - reference.len()].to_vec();
     reworded.extend_from_slice(named.as_bytes());
@@ -444,12 +448,6 @@ fn reword(original: &str, path: &Path) -> Result<(), Error> {
     ]);
     amend.arg("-F").arg(path);
     runner::status(&mut amend).map_err(Error::List)
-}
-
-/// The commit and subject of a line of a todo list, for messages, without the `#` that git puts
-/// between them.
-fn shown(rest: &str) -> String {
-    rest.replacen(" # ", " ", 1)
 }
 
 /// A line of a todo list that picks a commit.
