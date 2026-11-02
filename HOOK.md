@@ -51,7 +51,7 @@ replaces-index: refs/notes/replaces keeps moving, retrying (attempt 9, 4s; Ctrl-
 Git holds the lock of a ref for moments only. Once the lock has been held for ten seconds, the line names it and says that it may have been left behind, as by a git ended by `SIGKILL`, which git itself then refuses to take; `record` keeps retrying until the lock has been held for 30 seconds, and removing a lock that no running git holds lets the write through:
 
 ```
-replaces-index: refs/notes/replaces is locked, retrying (attempt 21, 12s; Ctrl-C to abandon); <git-dir>/refs/notes/replaces.lock was taken 40s ago; if no git command is running, it was left behind, and removing it lets the write through; the write is given up once it has been held for 30s
+replaces-index: refs/notes/replaces is locked, retrying (attempt 21, 12s; Ctrl-C to abandon); <git-dir>/refs/notes/replaces.lock was taken 14s ago; if no git command is running, it was left behind, and removing it lets the write through; the write is given up once it has been held for 30s
 ```
 
 `replaces-index-record`, `record-filter-repo` and `git pull-replaces` print the same lines, which end with `Ctrl-C to give up` instead, since running them again does what they did not finish.

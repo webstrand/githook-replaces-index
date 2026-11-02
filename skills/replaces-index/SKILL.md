@@ -60,11 +60,11 @@ Nothing of `<old>` is lost in `<new>` when every line is a `held` line, or when 
 Two operations, with different results:
 
 - **Replaying the branch's own commits onto the upstream.** `git rebase-replaces [<upstream>]` rebases the current branch onto `<upstream>`, by default its configured upstream, and leaves out each commit that `git compare-replaces HEAD <upstream>` reports as `held`, so that the old versions of the upstream's commits are not replayed onto their own replacements. It fetches a remote-tracking upstream and pulls its notes first. It says which commits it replays although they were rewritten elsewhere.
-- **Taking the upstream as the branch.** When `git compare-replaces HEAD <upstream>` prints only `held` lines, the branch holds nothing of its own, and may be reset to the upstream once the operator confirms. Tracked changes, and untracked files that the upstream tracks, would be overwritten, so the agent checks for them first:
+- **Taking the upstream as the branch.** When `git compare-replaces HEAD <upstream>` prints only `held` lines, the branch holds nothing of its own, and may be reset to the upstream once the operator confirms. Tracked changes, and untracked files that the upstream tracks, would be overwritten, so the agent checks for them first. The listing is of the whole work tree, with paths from its top as `<upstream>:` takes them, and separated by NULs, so that no name is quoted or split; ignored files, which git overwrites as it does in any checkout, are left out:
 
   ```sh
   git status --porcelain | grep -v '^??'
-  git ls-files -o --exclude-standard | while read f; do git cat-file -e <upstream>:"$f" 2>/dev/null && echo "$f"; done
+  git ls-files -z -o --exclude-standard --full-name :/ | while IFS= read -r -d '' f; do git cat-file -e "<upstream>:$f" 2>/dev/null && printf '%s\n' "$f"; done
   old=$(git rev-parse HEAD)
   git reset --hard <upstream>
   ```
@@ -116,4 +116,4 @@ A worktree with uncommitted changes is left alone until the operator decides wha
 ## Cautions
 
 - `git notes --ref=replaces prune` must never be run: it deletes the notes of commits made in other clones.
-- `git rebase --quit` records nothing; an interrupted rebase is continued or aborted instead.
+- `git rebase --quit` records nothing; an interrupted rebase is continued or aborted instead. The exception is a rebase interrupted while its `post-rewrite` hooks run, which has rewritten the branch already but leaves its state behind: it is ended with `git rebase --quit`, since `git rebase --abort` would reset the branch to where it was before the rebase.
