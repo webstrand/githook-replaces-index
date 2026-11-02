@@ -18,7 +18,8 @@
 //!
 //! A commit that was rewritten as commits the upstream lacks is replayed, with a warning. The
 //! remaining commits are replayed onto the upstream by `git rebase -i`, with this program as its
-//! sequence editor, which marks the commits left out as `drop` in the list.
+//! sequence editor, which marks the commits left out as `drop` in the list. No commit is folded
+//! into another, so that the branch keeps the commits it shares with the upstream.
 
 mod error;
 
@@ -30,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
-use replaces_index_compare::{Status, compare, describe};
+use replaces_index_compare::{Described, Status, compare, describe};
 use replaces_index_pull::{Pulled, fetch_and_pull};
 use runner::git;
 
@@ -45,12 +46,20 @@ struct Cli {
     /// runs this program so as its sequence editor.
     #[arg(long, hide = true, num_args = 2, value_names = ["DROP", "TODO"])]
     edit_todo: Option<Vec<PathBuf>>,
+    /// Gives HEAD the message in MESSAGE, if it is the commit the rebase made of ORIGINAL; the
+    /// todo list runs this program so after a pick to reword.
+    #[arg(long, hide = true, num_args = 2, value_names = ["ORIGINAL", "MESSAGE"])]
+    reword: Option<Vec<OsString>>,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match cli.edit_todo.as_deref() {
-        Some([drop, todo]) => edit_todo(drop, todo).map(|()| ExitCode::SUCCESS),
+    let result = match (cli.edit_todo.as_deref(), cli.reword.as_deref()) {
+        (Some([drop, todo]), _) => edit_todo(drop, todo).map(|()| ExitCode::SUCCESS),
+        (_, Some([original, message])) => match original.to_str() {
+            Some(original) => reword(original, Path::new(message)).map(|()| ExitCode::SUCCESS),
+            None => Ok(ExitCode::FAILURE),
+        },
         _ => rebase(cli.upstream.as_deref()),
     };
     result.unwrap_or_else(|err| {
@@ -98,6 +107,8 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
     let local = compare("HEAD", &up).map_err(Error::Compare)?;
     // Each commit left out, with why, and each replayed although it was rewritten, with into what.
     let mut drop: Vec<(&str, String)> = Vec::new();
+    // The commit of the upstream that replaces a commit left out, when a single one does.
+    let mut replacements: HashMap<&str, &str> = HashMap::new();
     let mut replayed: Vec<(&str, &[String])> = Vec::new();
     for entry in &local {
         let commit = entry.commit.as_str();
@@ -106,10 +117,15 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
                 commit,
                 format!("the reflog of {upstream} shows that it held it"),
             )),
-            Status::Held(into) => drop.push((
-                commit,
-                format!("{upstream} holds {} made from it", shorts(into)),
-            )),
+            Status::Held(into) => {
+                if let [replacement] = &into[..] {
+                    replacements.insert(commit, replacement);
+                }
+                drop.push((
+                    commit,
+                    format!("{upstream} holds {} made from it", shorts(into)),
+                ));
+            }
             Status::Rewritten(into) => replayed.push((commit, into)),
             Status::Later(_) | Status::Missing => {}
         }
@@ -142,10 +158,13 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
 
     let tmp = tempfile::tempdir().map_err(Error::TempDir)?;
     let drop_path = tmp.path().join("drop");
-    // `<commit> <why>` for each commit left out.
+    // `<commit> <replacement> <why>` for each commit left out, `-` for no single replacement.
     let list: String = drop
         .iter()
-        .map(|(commit, why)| format!("{commit} {why}\n"))
+        .map(|(commit, why)| {
+            let replacement = replacements.get(commit).unwrap_or(&"-");
+            format!("{commit} {replacement} {why}\n")
+        })
         .collect();
     fs::write(&drop_path, list).map_err(|source| Error::Write {
         path: drop_path.clone(),
@@ -156,7 +175,7 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
     let mut editor = quote(exe.as_os_str());
     editor.push(" --edit-todo ");
     editor.push(quote(drop_path.as_os_str()));
-    let status = git(["rebase", "-i", &up])
+    let status = git(["rebase", "-i", "--no-autosquash", &up])
         .env("GIT_SEQUENCE_EDITOR", editor)
         .status()
         .map_err(Error::Rebase)?;
@@ -248,13 +267,14 @@ fn shorts(commits: &[String]) -> String {
 }
 
 /// Marks as `drop` each pick in the todo list `todo` of a commit listed in `drop`, as `<commit>
-/// <why>` lines.
+/// <replacement> <why>` lines, with `-` for a commit that no single commit of the upstream
+/// replaces.
 ///
-/// A rebase with `rebase.autoSquash` lists each `fixup!` or `squash!` commit after the commit it
-/// folds into, as a `fixup` or `squash`. One that is left out itself is dropped as well. One that
-/// is not, but would fold into a commit left out, has nowhere to go: it is no part of the
-/// upstream, and folded into the commit before it, it would change another. The rebase is then
-/// refused, by a failure that git takes for the editor's, which ends it before it starts.
+/// The rebase runs without `--autosquash`, so that a `fixup!`, `squash!` or `amend!` commit is
+/// replayed as it is and folds into nothing: folding one into a commit of the upstream would make
+/// the branch part from the upstream again. One that names a commit left out, by its subject or an
+/// abbreviation of its id, is made to name what replaces that commit instead, by an `exec` line
+/// after its pick, so that a later `git rebase --autosquash` finds what it folds into.
 fn edit_todo(drop: &Path, todo: &Path) -> Result<(), Error> {
     let read = |path: &Path| {
         fs::read_to_string(path).map_err(|source| Error::Read {
@@ -263,64 +283,59 @@ fn edit_todo(drop: &Path, todo: &Path) -> Result<(), Error> {
         })
     };
     let dropped = read(drop)?;
-    let dropped: HashMap<&str, &str> = dropped
+    let dropped: HashMap<&str, Option<&str>> = dropped
         .lines()
-        .filter_map(|line| line.split_once(' '))
+        .filter_map(|line| {
+            let mut words = line.splitn(3, ' ');
+            let commit = words.next()?;
+            let replacement = words.next()?;
+            Some((commit, (replacement != "-").then_some(replacement)))
+        })
         .collect();
     let text = read(todo)?;
-    let lines: Vec<Option<Command>> = text.lines().map(Command::parse).collect();
-    let names: Vec<&str> = lines
-        .iter()
-        .flatten()
-        .map(|command| command.commit)
-        .collect();
+    let picks: Vec<Option<Pick>> = text.lines().map(Pick::parse).collect();
+    let names: Vec<&str> = picks.iter().flatten().map(|pick| pick.commit).collect();
     let ids = resolve(&names)?;
-    let mut edited = String::new();
-    // The commit left out that a `fixup` or `squash` on the next lines would fold into.
-    let mut folding: Option<(&str, &str)> = None;
-    let mut stranded = Vec::new();
-    for (line, command) in text.lines().zip(&lines) {
-        let Some(command) = command else {
-            // A command that makes or moves to another commit ends what a fixup folds into.
-            if matches!(
-                line.split_whitespace().next(),
-                Some("reset" | "t" | "merge" | "m")
-            ) {
-                folding = None;
-            }
-            edited.push_str(line);
-            edited.push('\n');
+    let named = dropped
+        .keys()
+        .copied()
+        .chain(dropped.values().flatten().copied());
+    let described = describe(named).map_err(Error::Compare)?;
+    let exe = std::env::current_exe().map_err(Error::CurrentExe)?;
+    let mut edited = Vec::new();
+    let mut reworded = 0;
+    for (line, pick) in text.lines().zip(&picks) {
+        let Some((pick, id)) = pick
+            .as_ref()
+            .and_then(|pick| Some((pick, ids.get(pick.commit)?.as_str())))
+        else {
+            edited.extend_from_slice(line.as_bytes());
+            edited.push(b'\n');
             continue;
         };
-        let id = ids.get(command.commit).map(String::as_str);
-        let why = id.and_then(|id| dropped.get(id));
-        match (command.folds, why, folding) {
-            (_, Some(&why), _) => {
-                if !command.folds {
-                    folding = Some((command.rest, why));
-                }
-                edited.push_str("drop ");
-                edited.push_str(command.rest);
-            }
-            (true, None, Some((into, why))) => {
-                stranded.push(format!(
-                    "{} would fold into {}, which is left out since {why}, but the upstream holds nothing made from {} itself",
-                    shown(command.rest),
-                    shown(into),
-                    command.commit
-                ));
-                edited.push_str(line);
-            }
-            (false, None, _) => {
-                folding = None;
-                edited.push_str(line);
-            }
-            (true, None, None) => edited.push_str(line),
+        if dropped.contains_key(id) {
+            edited.extend_from_slice(b"drop ");
+            edited.extend_from_slice(pick.rest.as_bytes());
+            edited.push(b'\n');
+            continue;
         }
-        edited.push('\n');
-    }
-    if !stranded.is_empty() {
-        return Err(Error::Stranded(stranded.join("; ")));
+        edited.extend_from_slice(line.as_bytes());
+        edited.push(b'\n');
+        let Some(message) = retargeted(id, pick, &dropped, &described)? else {
+            continue;
+        };
+        reworded += 1;
+        // The state directory of the rebase, which git removes once the rebase ends.
+        let path = todo.with_file_name(format!("replaces-message-{reworded}"));
+        fs::write(&path, message).map_err(|source| Error::Write {
+            path: path.clone(),
+            source,
+        })?;
+        edited.extend_from_slice(b"exec ");
+        edited.extend_from_slice(quote(exe.as_os_str()).as_bytes());
+        edited.extend_from_slice(format!(" --reword {id} ").as_bytes());
+        edited.extend_from_slice(quote(path.as_os_str()).as_bytes());
+        edited.push(b'\n');
     }
     let new = todo.with_extension("new");
     fs::write(&new, edited).map_err(|source| Error::Write {
@@ -333,42 +348,130 @@ fn edit_todo(drop: &Path, todo: &Path) -> Result<(), Error> {
     })
 }
 
+/// The message of the `fixup!`, `squash!` or `amend!` commit `id`, made to name what replaces the
+/// commit left out that it names; nothing when it names none, or one that no single commit
+/// replaces.
+fn retargeted(
+    id: &str,
+    pick: &Pick,
+    dropped: &HashMap<&str, Option<&str>>,
+    described: &HashMap<String, Described>,
+) -> Result<Option<Vec<u8>>, Error> {
+    let prefixed = |subject: &str| {
+        ["fixup! ", "squash! ", "amend! "]
+            .iter()
+            .find_map(|prefix| subject.strip_prefix(prefix))
+            .map(str::len)
+    };
+    if prefixed(shown(pick.rest).split_once(' ').map_or("", |(_, s)| s)).is_none() {
+        return Ok(None);
+    }
+    let message =
+        runner::stdout_bytes(&mut git(["log", "-1", "--format=%B", id])).map_err(Error::List)?;
+    let end = message
+        .iter()
+        .position(|&b| b == b'\n')
+        .unwrap_or(message.len());
+    // TODO(EuString): a subject that is not UTF-8 names no commit here.
+    let Ok(subject) = std::str::from_utf8(&message[..end]) else {
+        return Ok(None);
+    };
+    // `fixup! fixup! <reference>` names what `fixup! <reference>` names.
+    let mut reference = subject;
+    while let Some(len) = prefixed(reference) {
+        reference = &reference[reference.len() - len..];
+    }
+    let subject_of = |commit: &str| described.get(commit).map(|d| d.subject.as_str());
+    let by_id = reference.len() >= 4 && reference.bytes().all(|b| b.is_ascii_hexdigit());
+    // As git's autosquash finds what a commit folds into: by its whole subject, then by its id,
+    // then by the start of its subject; a reference that names more than one commit names none.
+    let lookups: [&dyn Fn(&str) -> bool; 3] = [
+        &|commit| subject_of(commit) == Some(reference),
+        &|commit| by_id && commit.starts_with(reference),
+        &|commit| subject_of(commit).is_some_and(|s| s.starts_with(reference)),
+    ];
+    let Some((lookup, target)) = lookups.iter().enumerate().find_map(|(i, lookup)| {
+        let found: Vec<&str> = dropped.keys().copied().filter(|c| lookup(c)).collect();
+        (found.len() == 1).then(|| (i, found[0]))
+    }) else {
+        return Ok(None);
+    };
+    let left_out = described
+        .get(target)
+        .map_or(target.to_owned(), |d| format!("{} {}", d.short, d.subject));
+    let Some(replacement) = dropped[target].and_then(|r| Some((r, described.get(r)?))) else {
+        println!(
+            "rebase-replaces: {} names {left_out}, which is left out, and no single commit replaces it; replaying it as it is",
+            shown(pick.rest)
+        );
+        return Ok(None);
+    };
+    let (_, new) = replacement;
+    let named = if lookup == 1 {
+        &new.short
+    } else {
+        &new.subject
+    };
+    if named == reference {
+        return Ok(None);
+    }
+    println!(
+        "rebase-replaces: making {} name {} {}, which replaces {left_out}",
+        shown(pick.rest),
+        new.short,
+        new.subject
+    );
+    let mut reworded = message[..end - reference.len()].to_vec();
+    reworded.extend_from_slice(named.as_bytes());
+    reworded.extend_from_slice(&message[end..]);
+    Ok(Some(reworded))
+}
+
+/// Gives HEAD the message in `path`, when HEAD is the commit that the rebase made of `original`,
+/// as its message tells: a pick that became empty and was dropped leaves HEAD at another commit.
+fn reword(original: &str, path: &Path) -> Result<(), Error> {
+    let message = |commit: &str| {
+        runner::stdout_bytes(&mut git(["log", "-1", "--format=%B", commit])).map_err(Error::List)
+    };
+    if message("HEAD")? != message(original)? {
+        return Ok(());
+    }
+    let mut amend = git([
+        "commit",
+        "--amend",
+        "--only",
+        "--no-verify",
+        "--allow-empty",
+        "-q",
+    ]);
+    amend.arg("-F").arg(path);
+    runner::status(&mut amend).map_err(Error::List)
+}
+
 /// The commit and subject of a line of a todo list, for messages, without the `#` that git puts
 /// between them.
 fn shown(rest: &str) -> String {
     rest.replacen(" # ", " ", 1)
 }
 
-/// A line of a todo list that names a commit to pick, or to fold into the one before.
-struct Command<'a> {
-    /// Whether it folds the commit into the one before: a `fixup` or `squash`.
-    folds: bool,
+/// A line of a todo list that picks a commit.
+struct Pick<'a> {
     /// The commit, as the todo list abbreviates it.
     commit: &'a str,
     /// The commit and what follows it, which a `drop` keeps.
     rest: &'a str,
 }
 
-impl<'a> Command<'a> {
+impl<'a> Pick<'a> {
     fn parse(line: &'a str) -> Option<Self> {
         let line = line.trim_start();
-        let (verb, mut rest) = line.split_once(' ')?;
-        let folds = match verb {
-            "pick" | "p" => false,
-            "fixup" | "f" | "squash" | "s" => true,
-            _ => return None,
-        };
-        // `fixup -C` and `fixup -c` take the message of the commit they fold.
-        if folds && let Some(after) = rest.strip_prefix("-C ").or(rest.strip_prefix("-c ")) {
-            rest = after;
+        let (verb, rest) = line.split_once(' ')?;
+        if !matches!(verb, "pick" | "p") {
+            return None;
         }
         let rest = rest.trim_start();
         let commit = rest.split_whitespace().next()?;
-        Some(Self {
-            folds,
-            commit,
-            rest,
-        })
+        Some(Self { commit, rest })
     }
 }
 

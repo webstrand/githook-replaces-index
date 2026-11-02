@@ -172,8 +172,8 @@ fn replaced_from(repo: &Path, olds: &[&str], new: &str) {
     );
 }
 
-/// `rewritten`, with `b'` changing `b`, and a `fixup! b` commit on top of the clone's `x`, which
-/// a rebase with `rebase.autoSquash` folds into `b`, and its id.
+/// `rewritten`, with `b'` changing `b`, and a `fixup! b` commit on top of the clone's `x`, in a
+/// clone whose `rebase.autoSquash` would fold it into `b`, and its id.
 fn rewritten_with_fixup() -> (tempfile::TempDir, tempfile::TempDir, [String; 5]) {
     let (upstream, clone, [a, b, a2, _]) = rewritten();
     // `b'` changes `b`, so that git does not skip `b` as a commit the upstream applied already.
@@ -205,21 +205,63 @@ fn leaves_out_a_fixup_that_the_upstream_folded_in() {
 }
 
 #[test]
-fn refuses_a_fixup_of_a_commit_left_out_that_the_upstream_lacks() {
-    let (upstream, clone, [a, b, a2, b2, f]) = rewritten_with_fixup();
+fn points_a_fixup_of_a_commit_left_out_at_its_replacement() {
+    let (upstream, clone, [a, b, a2, b2, _]) = rewritten_with_fixup();
     replaced(upstream.path(), &a, &a2);
     replaced(upstream.path(), &b, &b2);
-    let head = git(clone.path(), &["rev-parse", "HEAD"]);
+
+    let (ok, stdout, stderr) = run(clone.path(), REBASE, &[]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains("making"), "{stdout}");
+    // The fixup is replayed, not folded, and names `b'`, which a later autosquash folds it into.
+    assert_eq!(
+        subjects(clone.path()),
+        ["base", "a'", "b'", "x", "fixup! b'"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(clone.path().join("f")).unwrap(),
+        "f"
+    );
+}
+
+#[test]
+fn points_a_fixup_that_names_an_id_at_the_id_of_the_replacement() {
+    let (upstream, clone, [a, b, a2, b2, _]) = rewritten_with_fixup();
+    replaced(upstream.path(), &a, &a2);
+    replaced(upstream.path(), &b, &b2);
+    git(
+        clone.path(),
+        &[
+            "commit",
+            "-q",
+            "--amend",
+            "-m",
+            &format!("fixup! {}", &b[..10]),
+        ],
+    );
 
     let (ok, _, stderr) = run(clone.path(), REBASE, &[]);
-    assert!(!ok, "{stderr}");
-    assert!(
-        stderr.contains(&format!("{} fixup! b would fold into", &f[..7])),
-        "{stderr}"
+    assert!(ok, "{stderr}");
+    let short = git(upstream.path(), &["rev-parse", "--short", &b2]);
+    assert_eq!(
+        subjects(clone.path()).last().unwrap(),
+        &format!("fixup! {short}")
     );
-    assert!(stderr.contains("nothing was rebased"), "{stderr}");
-    assert_eq!(git(clone.path(), &["rev-parse", "HEAD"]), head);
-    assert!(!clone.path().join(".git/rebase-merge").exists());
+}
+
+#[test]
+fn folds_no_fixup_whatever_rebase_auto_squash_says() {
+    let (upstream, clone, [a, b, a2, b2, _]) = rewritten_with_fixup();
+    replaced(upstream.path(), &a, &a2);
+    replaced(upstream.path(), &b, &b2);
+    commit(clone.path(), "y", "fixup! x");
+
+    let (ok, _, stderr) = run(clone.path(), REBASE, &[]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        subjects(clone.path()),
+        ["base", "a'", "b'", "x", "fixup! b'", "fixup! x"]
+    );
 }
 
 #[test]
