@@ -17,7 +17,8 @@ pub enum Error {
     #[error("could not use the index {}: {source}", path.display())]
     Index { path: PathBuf, source: redb::Error },
     #[error(
-        "the index {} is damaged: {source}. It holds nothing that {REF} does not, so it may be deleted once no git whereis, compare-replaces or rebase-replaces is running, and the next of them builds it anew",
+        "unable to read the replaces index at {}: {source}. No data has been lost: the index is damaged, but it is rebuilt from {REF}; delete {} and retry the command to rebuild it",
+        path.display(),
         path.display()
     )]
     Damaged { path: PathBuf, source: redb::Error },

@@ -169,8 +169,15 @@ fn says_how_to_rebuild_a_damaged_index() {
         std::fs::write(&index, damage).unwrap();
         let (ok, _, stderr) = run(repo, WHEREIS, &[&a]);
         assert!(!ok);
-        assert!(stderr.contains("is damaged"), "{stderr}");
-        assert!(stderr.contains("may be deleted"), "{stderr}");
+        assert!(
+            stderr.contains("unable to read the replaces index"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("No data has been lost"), "{stderr}");
+        assert!(
+            stderr.contains(&format!("delete {}", index.display())),
+            "{stderr}"
+        );
         assert!(index.exists());
     }
     std::fs::remove_file(&index).unwrap();

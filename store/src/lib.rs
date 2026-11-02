@@ -150,8 +150,10 @@ impl Index {
 }
 
 /// The failure `source` of the index at `path`. A file that redb cannot read as a database of its
-/// format is told apart, so that the operator learns that the index may be deleted: it should
-/// never be damaged, and is not deleted unasked.
+/// format is told apart, so that the operator learns that the index may be deleted. It is not
+/// deleted unasked: the damage most likely comes of something outside the programs, such as a
+/// network filesystem or a lock that failed to keep another writer out, which the operator should
+/// see.
 fn index_error(path: &std::path::Path, source: impl Into<redb::Error>) -> Error {
     let source = source.into();
     let path = path.to_owned();
