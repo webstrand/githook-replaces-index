@@ -214,7 +214,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
                 }
             }
         }
-        Kind::FilterRepo => {}
+        Kind::FilterRepo => unreachable!("a filter-repo rewrite returns before the match"),
     }
     rewrite
 }
