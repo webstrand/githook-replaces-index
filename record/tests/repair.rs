@@ -58,7 +58,7 @@ fn commit(repo: &Path, name: &str) -> String {
     ok(repo, &["rev-parse", "HEAD"])
 }
 
-/// The lines of the note of `commit`, sorted.
+/// The lines of the note of `commit`, in the order the note holds them.
 fn note(repo: &Path, commit: &str) -> Vec<String> {
     let output = git(repo, &["notes", "--ref=replaces", "show", commit])
         .output()

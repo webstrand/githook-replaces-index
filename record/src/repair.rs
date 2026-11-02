@@ -258,10 +258,9 @@ fn dropped(before: &str, after: &str) -> Result<Notes, Error> {
     Ok(lost)
 }
 
-/// Says on standard error, after `prefix`, which fetch refspecs move the ref whether or not it
-/// fast-forwards, as `+refs/notes/*:refs/notes/*` does, and so drop on each fetch what the clone
-/// recorded since, and how each comes to fetch the remote's notes beside the local ones. False
-/// when it named any, or could not read them.
+/// Says on standard error, after `prefix`, each fetch refspec that forces the notes ref, with the
+/// configuration that fetches the remote's notes beside the local ones instead. False when it
+/// named any, or could not read the refspecs.
 pub fn check_refspecs(prefix: &str) -> bool {
     let mut stderr = io::stderr();
     let forcing = match runner::refspec::forcing(REF) {

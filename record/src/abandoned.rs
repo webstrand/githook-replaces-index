@@ -121,7 +121,7 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
         match name.to_str() {
             Some(name) if name.starts_with('.') => {}
             Some(name) => names.push(name.to_owned()),
-            // It is left where it is.
+            // It is never removed, since no record is so named.
             None => waiting.dropped.push(format!(
                 "{}, whose name is not UTF-8, is no abandoned record",
                 dir.join(&name).display()

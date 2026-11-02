@@ -2,7 +2,7 @@ use std::io;
 
 use crate::REF;
 
-/// A failure to record, displayed after `replaces-index:`.
+/// A failure to record, displayed after the program's prefix, `replaces-index:` or `gc-replaces:`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("could not read the replacements: {0}")]

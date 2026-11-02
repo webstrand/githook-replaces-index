@@ -134,7 +134,7 @@ pub fn record(rewrite: &Rewrite) -> Result<(), Error> {
 /// Records `rewrite` as `record` does, and calls `written` as soon as the ref holds it.
 ///
 /// A writer retries for as long as other writers move the ref or hold its lock; `progress` tells
-/// how it fares, and a process that must end sooner ends it.
+/// how it fares. A process that must end sooner is ended by a signal.
 pub fn record_then(rewrite: &Rewrite, written: impl FnOnce()) -> Result<(), Error> {
     // An abbreviated id would be written into the notes as it is, where no query matches it.
     let ids = rewrite
@@ -235,9 +235,9 @@ fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
                     Some((last, since)) if *last == found => *since,
                     _ => Instant::now(),
                 };
-                // Held for as long as this writer has watched it, by its own clock, which no
-                // clock of another machine, as on a network filesystem, puts out. The lock
-                // itself is never taken or removed.
+                // Measured by this writer's monotonic clock, which the clock of another host that
+                // shares the repository on a network filesystem does not skew. The lock itself is
+                // never taken or removed.
                 let held = since.elapsed();
                 if held >= lock_patience() {
                     return Err(Error::Locked {
@@ -315,7 +315,6 @@ fn progress_mut() -> std::sync::MutexGuard<'static, Progress> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// How the writer of this process fares.
 pub fn progress() -> Progress {
     progress_mut().clone()
 }
@@ -394,8 +393,9 @@ fn attempt(change: Change, ident: &mut Option<Vec<u8>>) -> Result<Attempt, Error
         }
     };
     let stream = stream(ident, parent.as_deref(), theirs, &changed);
-    // Without --force, fast-import moves the ref only to a commit that holds the one it points at
-    // when fast-import moves it, which a writer that came in between has moved it from.
+    // Without --force, fast-import moves the ref only to a commit that descends from the one the
+    // ref points at when fast-import updates it, so it refuses once another writer has moved the
+    // ref since it was read.
     match runner::stdout_with_input(&mut git(["fast-import", "--quiet"]), &stream) {
         Ok(_) => Ok(Attempt::Written),
         Err(err) => refused(parent.as_deref(), err),
@@ -434,7 +434,6 @@ fn refused(parent: Option<&str>, err: runner::Error) -> Result<Attempt, Error> {
     Ok(Attempt::Refused(err))
 }
 
-/// Whether commit `ancestor` is `descendant` or one of its ancestors.
 fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
     runner::is_ancestor(ancestor, descendant).map_err(Error::Read)
 }
@@ -473,7 +472,6 @@ fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
         .iter()
         .flat_map(|(_, ours, theirs)| ours.iter().chain([theirs]).map(|file| file.blob.as_str()))
         .collect();
-    // The contents of the blobs, in the order of `blobs`.
     let mut contents = runner::cat_file(&blobs).map_err(Error::Read)?.into_iter();
     let mut next_lines = || lines(&contents.next().flatten().unwrap_or_default());
     let mut changed = Notes::new();

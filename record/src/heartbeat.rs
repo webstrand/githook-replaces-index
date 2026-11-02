@@ -37,11 +37,9 @@ pub fn line(elapsed: Duration, stop: &str) -> String {
     }
 }
 
-/// What to do about `lock`, watched held since `since`, once that is a third of `lock_patience`:
-/// git holds the lock of a ref for moments only, and one that has been there that long was most
-/// likely left by a git ended by `SIGKILL`, which git then refuses to take as well. The writer
-/// retries until the whole of `lock_patience`, since a git on a slow filesystem may yet let go
-/// of it.
+/// What to do about `lock`, watched held since `since`, once that is a third of `lock_patience`.
+/// The writer retries until the whole of `lock_patience`, since a git on a slow filesystem may yet
+/// let go of it.
 fn stale(lock: Option<&(Lock, Instant)>) -> Option<String> {
     let (lock, since) = lock?;
     let held = since.elapsed();

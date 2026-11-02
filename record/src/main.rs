@@ -1,7 +1,7 @@
 //! Records the rewrite given on standard input, one `<old> <new>` line for each commit made from
-//! another, in refs/notes/replaces: the note of each new commit comes to stand in place of the
-//! commit it was made from. The abandoned records of the repository are recorded first, and
-//! removed once recorded.
+//! another, in refs/notes/replaces: the note of each new commit names the commit it was made from,
+//! in whose place the new commit stands. The abandoned records of the repository are recorded
+//! first, and removed once recorded.
 
 use std::io::{self, Read};
 use std::process::ExitCode;
