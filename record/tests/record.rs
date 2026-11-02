@@ -497,12 +497,19 @@ fn gc_removes_the_notes_of_commits_gone_and_keeps_their_lines() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    assert!(
-        stdout.contains("removed 1 notes") && stdout.contains("kept 1"),
-        "{stdout}"
-    );
-    // The repair after gc takes the removal for one that loses nothing.
-    assert!(!stderr.contains("put back"), "{stderr}");
+    let named = |text: &str| {
+        [(&a, "<a>"), (&a2, "<a'>"), (&a3, "<a''>"), (&x, "<x>")]
+            .iter()
+            .fold(text.to_owned(), |text, (id, name)| {
+                text.replace(id.as_str(), name)
+            })
+    };
+    // The repair after gc takes the removal for one that loses nothing, and says nothing of it.
+    insta::assert_snapshot!(format!(
+        "stdout:\n{}\nstderr:\n{}",
+        named(&stdout),
+        named(&stderr)
+    ));
     assert_eq!(note(repo, &a2), None);
     assert!(note(repo, &a3).unwrap().contains(&other));
     assert_eq!(

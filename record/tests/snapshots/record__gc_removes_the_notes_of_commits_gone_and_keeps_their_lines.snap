@@ -1,0 +1,8 @@
+---
+source: record/tests/record.rs
+expression: "format!(\"stdout:\\n{}\\nstderr:\\n{}\", named(&stdout), named(&stderr))"
+---
+stdout:
+gc-replaces: removed 1 notes of commits this clone no longer has, whose lines the notes that name them hold; kept 1 that no note names
+
+stderr:

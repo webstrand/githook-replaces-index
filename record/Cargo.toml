@@ -12,4 +12,5 @@ thiserror = "2"
 runner = { package = "replaces-index-runner", path = "../runner" }
 
 [dev-dependencies]
+insta = "1"
 tempfile = "3"

@@ -139,15 +139,24 @@ fn placed(
             restored.insert(commit);
             continue;
         }
+        let notes = notes.as_ref().expect("read for a commit the clone lacks");
+        let mut lacked = false;
         for namer in &naming {
             // A commit that a cycle of rewrites names does not come to replace itself.
             let own = format!("{REPLACES}{namer}").into_bytes();
-            additions
-                .entry(namer.clone())
-                .or_default()
-                .extend(lines.iter().filter(|line| **line != own).cloned());
+            let held = &notes[namer];
+            let missing: Vec<_> = lines
+                .iter()
+                .filter(|line| **line != own && !held.contains(*line))
+                .cloned()
+                .collect();
+            lacked |= !missing.is_empty();
+            additions.entry(namer.clone()).or_default().extend(missing);
         }
-        folded.push((commit, naming));
+        // A removal that folded the note into its namers first, as gc's does, lost nothing.
+        if lacked {
+            folded.push((commit, naming));
+        }
     }
     additions.retain(|_, lines| !lines.is_empty());
     Ok((additions, restored))
