@@ -62,6 +62,24 @@ fn abandons_on(signal: &str, number: i32) {
 }
 
 #[test]
+fn a_signal_before_the_recording_starts_abandons_the_rewrite() {
+    let (repo, a, a2) = amended();
+    // The hook looks for the directory of abandoned records before it starts to record.
+    let (child, _) = start_held(
+        repo.path(),
+        "amend",
+        &format!("{a} {a2}\n"),
+        "--git-common-dir",
+    );
+    kill("TERM", &child.id().to_string());
+    release(repo.path());
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.signal(), Some(15), "{stderr}");
+    assert_eq!(abandoned(repo.path()), [format!("{a} {a2}")], "{stderr}");
+}
+
+#[test]
 fn an_interrupt_abandons_the_rewrite() {
     abandons_on("INT", 2);
 }

@@ -80,7 +80,9 @@ fn main() -> ExitCode {
     }
     // Found at once, since once a signal arrives no git command starts.
     let dir = abandoned::dir().map_err(|err| err.to_string());
-    let outstanding = Arc::new(Mutex::new(None));
+    // Held from the start, so that a signal before the recording holds it keeps it all the same.
+    let held = (!rewrite.replacements.is_empty()).then(|| rewrite.clone());
+    let outstanding = Arc::new(Mutex::new(held));
     {
         let events = events.clone();
         let outstanding = Arc::clone(&outstanding);
