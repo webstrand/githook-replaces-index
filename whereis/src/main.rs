@@ -33,7 +33,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("whereis: {err}");
+            eprintln!("whereis: {}", runner::chain(&err));
             ExitCode::FAILURE
         }
     }

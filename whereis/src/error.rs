@@ -7,10 +7,10 @@ pub enum Error {
     Unknown(String),
     #[error("{0} is ambiguous in {REF}")]
     Ambiguous(String),
-    #[error("could not resolve a commit: {0}")]
+    #[error("could not resolve a commit")]
     Resolve(#[source] runner::Error),
-    #[error("could not list the refs that hold a commit: {0}")]
+    #[error("could not list the refs that hold a commit")]
     Refs(#[source] runner::Error),
-    #[error("{0}")]
-    Index(#[source] replaces_index_store::Error),
+    #[error(transparent)]
+    Index(replaces_index_store::Error),
 }

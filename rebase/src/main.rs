@@ -71,7 +71,7 @@ fn main() -> ExitCode {
         _ => rebase(cli.upstream.as_deref(), cli.keep_base),
     };
     result.unwrap_or_else(|err| {
-        eprintln!("rebase-replaces: {err}");
+        eprintln!("rebase-replaces: {}", runner::chain(&err));
         ExitCode::FAILURE
     })
 }

@@ -1,7 +1,7 @@
 /// A failure of a pull, displayed after `pull-replaces:`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("could not fetch {remote}: {source}")]
+    #[error("could not fetch {remote}")]
     Fetch {
         remote: String,
         source: runner::Error,
@@ -11,7 +11,7 @@ pub enum Error {
         replaces_index_record::REF
     )]
     Unconfigured { remote: String },
-    #[error("could not merge the notes of {remote}: {source}")]
+    #[error("could not merge the notes of {remote}")]
     Merge {
         remote: String,
         source: replaces_index_record::Error,

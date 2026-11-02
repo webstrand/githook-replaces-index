@@ -5,11 +5,11 @@ use crate::REF;
 /// A failure to record, displayed after the program's prefix, `replaces-index:` or `gc-replaces:`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("could not read the replacements: {0}")]
+    #[error("could not read the replacements")]
     Input(#[source] io::Error),
-    #[error("could not read {REF}: {0}")]
+    #[error("could not read {REF}")]
     Read(#[source] runner::Error),
-    #[error("could not write {REF}: {0}")]
+    #[error("could not write {REF}")]
     Write(#[source] runner::Error),
     #[error("{REF} points to {0}, which is not a commit")]
     NotACommit(String),
@@ -25,7 +25,7 @@ pub enum Error {
         path: std::path::PathBuf,
         seconds: u64,
     },
-    #[error("could not read or remove the abandoned records in {path}: {source}")]
+    #[error("could not read or remove the abandoned records in {path}")]
     Abandoned {
         path: std::path::PathBuf,
         source: io::Error,

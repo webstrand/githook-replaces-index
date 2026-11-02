@@ -27,7 +27,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("pull-replaces: {err}");
+            eprintln!("pull-replaces: {}", runner::chain(&err));
             ExitCode::FAILURE
         }
     }

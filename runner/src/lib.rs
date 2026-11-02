@@ -29,6 +29,26 @@ pub enum Error {
     Malformed { command: String },
 }
 
+/// `error` and the errors under it, as the programs print them: `error` on the first line, and
+/// each error under it on the lines that follow, indented by two spaces more at each level.
+pub fn chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    let mut indent = String::new();
+    while let Some(error) = source {
+        indent.push_str("  ");
+        for line in error.to_string().lines() {
+            text.push('\n');
+            if !line.is_empty() {
+                text.push_str(&indent);
+                text.push_str(line);
+            }
+        }
+        source = error.source();
+    }
+    text
+}
+
 /// A word that the shell reads back as `word`, whatever its bytes.
 pub fn quote(word: &OsStr) -> OsString {
     let mut quoted = vec![b'\''];

@@ -37,7 +37,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("replaces-index: {err}");
+            eprintln!("replaces-index: {}", runner::chain(&err));
             ExitCode::FAILURE
         }
     }

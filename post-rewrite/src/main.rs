@@ -114,7 +114,7 @@ fn main() -> ExitCode {
         match event {
             Event::Done(Ok(())) => return ExitCode::SUCCESS,
             Event::Done(Err(Failure { error, rewrite })) => {
-                say(error);
+                say(runner::chain(&error));
                 return match hook.abandon(Some(rewrite), None) {
                     (Some(signal), _) => die(signal),
                     (None, _) => ExitCode::FAILURE,
