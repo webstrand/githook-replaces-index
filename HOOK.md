@@ -32,6 +32,15 @@ The programs are written in Rust, each a crate in the directory of its name, in 
 
 The library crate `store` keeps the index that the queries read.
 
+## Terms
+
+- An *amend* is a run of `git commit --amend`, by the operator, by an `exec` line of a rebase or by a test, and nothing else.
+- A *single-commit rewrite* is a run of `post-rewrite` that git passes the kind `amend`. Git runs one after an amend, and during a rebase also after each fixup or squash step.
+- A *replacement* is one `<old> <new>` line that git passes to `post-rewrite`. Its old commit is the *rewritten commit*, and its new commit is the commit that the rewrite made.
+- A *deferred replacement* is the replacement of a single-commit rewrite during a rebase that the hook keeps in `replaces-index-deferred` in the rebase's state directory until the rebase ends. A replacement that the hook records when git reports it is *recorded at once*.
+- *Git's `rebase-merge/amend` file* is the file of the rebase's state directory in which git names the commit that the rebase stopped at for an `edit`.
+- An *`amend!` commit* is a commit whose subject begins with `amend!`, which `git rebase --autosquash` folds into the commit it names.
+
 ## Recording
 
 Git runs `post-rewrite` after `git commit --amend` and after a rebase, with one line per rewritten commit mapping the old commit to the new one. The hook passes these lines to `record`.
@@ -56,25 +65,25 @@ replaces-index: refs/notes/replaces is locked, retrying (attempt 21, 12s; Ctrl-C
 
 `replaces-index-record`, `record-filter-repo` and `git pull-replaces` print the same lines, which end with `Ctrl-C to give up` instead, since running them again does what they did not finish.
 
-- An amend records that the new commit was made from the amended one.
+- An amend records that the new commit was made from the commit it rewrote.
 - A rebase records the same for each commit it creates.
 - A squash or fixup records that the result was made from every commit folded together.
 - A commit that git reports as made from itself, as an amend that changes nothing within the same second does, records nothing.
 - A commit recreated with the id of a commit it stands in place of, for instance when a commit is amended back to an earlier one, does not name itself. The notes then hold a cycle, which the queries follow without harm.
 
-During a rebase, git reports each fixup or squash step, and each amend that an `exec` line or a stopped rebase makes, as an amend of a commit that the rebase created itself. Such commits never appear outside the rebase. The hook sets these amends aside in the rebase's state directory, and when the rebase ends, follows each commit that the rebase reports through the chain of its amends to the last commit of the chain that is on the branch as the rebase ends: the commits between were replaced by a later amend, and an amend undone during the rebase, for instance by a `git reset` back to the amended commit, is not followed. No commit that the rebase discarded is therefore named. An amend of a commit that was there before the rebase began, such as one that a pick kept as it was or the commit the rebase is onto, is recorded at once instead: the rebase does not report such a commit as rewritten, and a rebase that rewrites nothing else runs no `post-rewrite` when it ends. An amend of the commit that such an amend made is recorded at once in turn, which names the commit between. The exception is the commit that the rebase stopped at for an `edit`, kept pick or not: the rebase reports it as replaced by the commit it finds when it goes on, and names it in `amend` in its state directory, so its amends are set aside as those of any other commit. Git removes the state directory when the rebase ends or is aborted, so an aborted rebase records nothing. The state directory is found through `git rev-parse --git-path`, so each worktree's rebase keeps its own amends.
+During a rebase, git reports each fixup or squash step, and each amend that an `exec` line or the operator at a stop of the rebase runs, as a single-commit rewrite of a commit that the rebase created itself. Such commits never appear outside the rebase. The hook defers the replacements of these rewrites in the rebase's state directory, and when the rebase ends, follows each commit that the rebase reports through the chain of its deferred replacements to the last commit of the chain that is on the branch as the rebase ends: the commits between were replaced in turn, and a replacement undone during the rebase, for instance by a `git reset` back to the rewritten commit, is not followed. No commit that the rebase discarded is therefore named. A single-commit rewrite of a commit that was there before the rebase began, such as one that a pick kept as it was or the commit the rebase is onto, is recorded at once instead: the rebase does not report such a commit as rewritten, and a rebase that rewrites nothing else runs no `post-rewrite` when it ends. A single-commit rewrite of the commit that such a rewrite made is recorded at once in turn, which names the commit between. The exception is the commit that the rebase stopped at for an `edit`, kept pick or not: the rebase reports it as replaced by the commit it finds when it goes on, and names it in git's `rebase-merge/amend` file, so its replacements are deferred as those of any other commit. Git removes the state directory when the rebase ends or is aborted, so an aborted rebase records nothing. The state directory is found through `git rev-parse --git-path`, so each worktree's rebase keeps its own deferred replacements.
 
-`git am` keeps its state in `rebase-apply/` as a rebase may, but marks it with an `applying` file rather than `rebasing`, and runs no `post-rewrite` when it ends. An amend while `git am` is stopped is therefore recorded at once, rather than set aside.
+`git am` keeps its state in `rebase-apply/` as a rebase may, but marks it with an `applying` file rather than `rebasing`, and runs no `post-rewrite` when it ends. An amend while `git am` is stopped is therefore recorded at once, rather than deferred.
 
-When the hook cannot keep track of the amends of a rebase, it says why and records a cruder form instead, in which each replacement holds all the same:
+When the hook cannot keep track of the deferred replacements of a rebase, it says why and records a cruder form instead, in which each replacement holds all the same:
 
 | Failure | What the hook records |
 | - | - |
-| The state directory cannot be found, or whether the amended commit was there before the rebase cannot be told | the amend, at once |
-| The amend cannot be set aside | the amend, at once |
-| The state directory cannot be found when the rebase ends | the replacements as git reported them; the amends set aside are not recorded |
-| The amends set aside cannot be read when the rebase ends | the replacements as git reported them; the amends set aside are not recorded |
-| Whether a commit is on the branch cannot be told when the rebase ends | the replacements as git reported them, and every amend set aside, as it was made |
+| The state directory cannot be found, or whether the rewritten commit was there before the rebase cannot be told | the replacement, at once |
+| The replacement cannot be deferred | the replacement, at once |
+| The state directory cannot be found when the rebase ends | the replacements as git reported them; the deferred replacements are not recorded |
+| The deferred replacements cannot be read when the rebase ends | the replacements as git reported them; the deferred replacements are not recorded |
+| Whether a commit is on the branch cannot be told when the rebase ends | the replacements as git reported them, and every deferred replacement, as it was made |
 
 A cruder form names commits that the rebase discarded, or leaves out the commit that took the place of one it reported. `record-filter-repo` passes on no rebase, and the hook looks for none when it runs.
 
@@ -91,7 +100,7 @@ printf '%s\n' '<old> <new>' … | "$(git rev-parse --git-common-dir)"/bin/replac
 replaces-index: the next rewrite records every abandoned record, as does "$(git rev-parse --git-common-dir)"/bin/replaces-index-record --abandoned
 ```
 
-The hook then exits with a failure status, which git ignores: the rewrite itself is complete. At the end of a rebase, the record holds the replacements as the hook would have recorded them, after they were followed through the amends set aside. A signal that comes while the hook follows them, which no git command can then help it finish, keeps the cruder form instead: the replacements as git reported them, and every amend set aside as it was made.
+The hook then exits with a failure status, which git ignores: the rewrite itself is complete. At the end of a rebase, the record holds the replacements as the hook would have recorded them, after they were followed through the deferred replacements. A signal that comes while the hook follows them, which no git command can then help it finish, keeps the cruder form instead: the replacements as git reported them, and every deferred replacement as it was made.
 
 Each record is a file of `<old> <new>` lines in `replaces-abandoned/` in the common git directory, which the worktrees share. It is named after the time it was written and a random suffix, so that the records sort in the order they were written. The hook writes it under a temporary name that begins with `.`, and renames it, so that a record either holds the whole rewrite or does not exist. When no record can be written, for instance because the disk is full, the hook says so and prints the command all the same. A standard error that cannot be written to, for instance once the terminal is gone, does not keep the record from being written.
 
