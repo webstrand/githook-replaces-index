@@ -101,15 +101,25 @@ Each run of the hook, `record-filter-repo` included, records the abandoned recor
 
 ## Repair
 
-Lines are only ever added to the notes. A step of the reflog of `refs/notes/replaces` after which a note lacks a line it held before was therefore made by a writer that overwrote another, such as `git notes add` in a git that moves the ref without naming the commit it read, which builds its commit on the notes as they were when it started, or by a note removed by hand. Such a step cannot be told from the history of the ref, since the overwriting commit has the one it overwrote as its parent; only the notes themselves tell.
+A recorded rewrite holds for as long as its commits do, so the note of a commit the clone has never loses a line. A step of the reflog of `refs/notes/replaces` after which such a note lacks a line it held before was therefore made by a writer that overwrote another, such as a fetch through a refspec that forces the ref, `git notes add -f`, a `git notes merge` that keeps one side, or `git notes add` in a git that moves the ref without naming the commit it read, which builds its commit on the notes as they were when it started; or the note was removed by hand. Such a step cannot be told from the history of the ref, since the overwriting commit has the one it overwrote as its parent; only the notes themselves tell.
 
-After each write, the hook, `replaces-index-record` and `git pull-replaces` check the steps of the reflog since the last check, through `git diff-tree` between the commits of each step, and write back, as `record` writes, the lines of each note that a step dropped. They say so:
+After each write, the hook, `replaces-index-record` and `git pull-replaces` check the steps of the reflog since the last check, through `git diff-tree` between the commits of each step, and write back, as `record` writes, the lines of each such note that a step dropped. They say so:
 
 ```
 replaces-index: a writer dropped lines from refs/notes/replaces when it moved it from <commit> to <commit>; they are put back
 ```
 
-The commit up to which the reflog was checked is kept in `replaces-checked` in the common git directory, so that each step is checked once; a run checks the step of its own write, and any of other writers since. A note removed with `git notes remove` is put back as well. A note that a step moved to another fanout, as a writer moves every note once their number crosses a power of 256, is compared with itself by the commit it annotates, and was not dropped. A clone that keeps no reflog of the notes ref, as a bare clone does unless `core.logAllRefUpdates` says otherwise, is not checked, and neither is a step that the reflog no longer holds once it expired.
+The commit up to which the reflog was checked is kept in `replaces-checked` in the common git directory, so that each step is checked once; a run checks the step of its own write, and any of other writers since. A note removed with `git notes remove` is put back as well.
+
+The note of a commit that the clone no longer has, once garbage collection removed the commit, may go, as `git notes prune` removes it. Its lines are then added to the notes that name the commit in a `replaces:` line, those of the commits made from it, which may lack some, for instance when its note arrived from another clone after they were made; what it recorded is thereby kept, and the note stays removed:
+
+```
+replaces-index: the note of <commit>, which this clone no longer has, lost lines; the notes of <commit> …, which name it, hold them
+```
+
+A note of a commit that the clone lacks and that no note names is the only record of what it holds, such as one pulled from a clone whose commits were never fetched, and is written back as that of a commit the clone has.
+
+A note that a step moved to another fanout, as a writer moves every note once their number crosses a power of 256, is compared with itself by the commit it annotates, and was not dropped. A clone that keeps no reflog of the notes ref, as a bare clone does unless `core.logAllRefUpdates` says otherwise, is not checked, and neither is a step that the reflog no longer holds once it expired.
 
 A fetch refspec with a `+` that maps a ref of a remote to `refs/notes/replaces`, as `+refs/notes/*:refs/notes/*` set to share other notes does, replaces the local notes with the remote's on each fetch, and drops every line that the clone recorded since it last pulled. After each write, and when `install.sh` installs the programs, such a refspec is named on standard error, with the command that keeps the ref out of it, `git config --add 'remote.<remote>.fetch' '^refs/notes/replaces'`. Nothing is changed unasked. `git pull-replaces` fetches into a ref of its own, and needs no refspec.
 

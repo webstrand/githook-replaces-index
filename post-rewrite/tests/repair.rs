@@ -207,3 +207,73 @@ fn a_file_that_is_no_note_may_be_removed() {
     let stderr = amend(repo, &b, &b2);
     assert!(!stderr.contains("put back"), "{stderr}");
 }
+
+/// Removes from `repo` every object that no ref reaches, as garbage collection does once the
+/// reflogs expire, and then, after a rewrite is recorded, the notes of the commits removed, as
+/// `git notes prune` does. The repair sees only the steps after the oldest the reflog holds.
+fn collect_and_prune(repo: &Path) {
+    ok(repo, &["reflog", "expire", "--expire=now", "--all"]);
+    ok(repo, &["gc", "-q", "--prune=now"]);
+    let c = commit(repo, "c");
+    let c2 = amend_of(repo, &c);
+    amend(repo, &c, &c2);
+    ok(repo, &["notes", "--ref=replaces", "prune"]);
+}
+
+/// The commits that have a note.
+fn annotated(repo: &Path) -> Vec<String> {
+    ok(repo, &["notes", "--ref=replaces", "list"])
+        .lines()
+        .filter_map(|line| Some(line.split_once(' ')?.1.to_owned()))
+        .collect()
+}
+
+#[test]
+fn the_note_of_a_commit_gone_is_kept_in_the_notes_that_name_it() {
+    let (repo, a, a2) = amended();
+    let repo = repo.path();
+    amend(repo, &a, &a2);
+    let a3 = amend_of(repo, &a2);
+    amend(repo, &a2, &a3);
+    ok(repo, &["update-ref", "refs/heads/kept", &a3]);
+    // A line that the note of `a'` holds and that of `a''` lacks, as when the note of `a'` arrived
+    // from another clone after `a''` was made.
+    let other = format!("replaces: {}", "1".repeat(40));
+    ok(
+        repo,
+        &["notes", "--ref=replaces", "append", "-m", &other, &a2],
+    );
+    collect_and_prune(repo);
+    assert!(!annotated(repo).contains(&a2));
+
+    let b = commit(repo, "b");
+    let b2 = amend_of(repo, &b);
+    let stderr = amend(repo, &b, &b2);
+    assert!(
+        stderr.contains(&format!("the note of {a2}, which this clone no longer has")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("put back"), "{stderr}");
+    assert!(note(repo, &a3).contains(&other), "{:?}", note(repo, &a3));
+    // The note of `a'` stays pruned.
+    assert!(!annotated(repo).contains(&a2));
+}
+
+#[test]
+fn the_note_of_a_commit_gone_that_no_note_names_is_put_back() {
+    let repo = repo();
+    let repo = repo.path();
+    commit(repo, "base");
+    // A commit that no ref reaches, and whose note no other names.
+    let x = ok(repo, &["commit-tree", "HEAD^{tree}", "-m", "x"]);
+    let line = format!("replaces: {}", "2".repeat(40));
+    ok(repo, &["notes", "--ref=replaces", "add", "-m", &line, &x]);
+    collect_and_prune(repo);
+    assert!(!annotated(repo).contains(&x));
+
+    let b = commit(repo, "b");
+    let b2 = amend_of(repo, &b);
+    let stderr = amend(repo, &b, &b2);
+    assert!(stderr.contains("put back"), "{stderr}");
+    assert!(annotated(repo).contains(&x));
+}

@@ -95,7 +95,7 @@ impl Rewrite {
 
 /// The lines of notes, by the commit they annotate. A line is the bytes that a note holds, which
 /// need not be UTF-8: a note from another clone, or one written by hand, may hold any.
-type Notes = BTreeMap<String, BTreeSet<Vec<u8>>>;
+pub(crate) type Notes = BTreeMap<String, BTreeSet<Vec<u8>>>;
 
 /// The lines of the note `text`, each without its `\n`.
 pub(crate) fn lines(text: &[u8]) -> BTreeSet<Vec<u8>> {
@@ -180,8 +180,8 @@ enum Change<'a> {
     Rewrite(&'a Rewrite),
     /// The notes of another notes commit.
     Merge(&'a str),
-    /// The lines of the notes of an earlier notes commit, which a writer dropped.
-    Restore(&'a str),
+    /// Lines to add to the notes of the commits they are given for, which a writer dropped.
+    Add(&'a Notes),
 }
 
 /// Writes `change`, retrying while other writers move the ref, and calls `written` as soon as the
@@ -333,10 +333,7 @@ fn attempt(change: Change, ident: &mut Option<Vec<u8>>) -> Result<Attempt, Error
             Some(ours) if is_ancestor(ours, theirs)? => return move_ref(theirs, Some(ours)),
             Some(ours) => (Changed::ByPath(union(ours, theirs)?), Some(theirs)),
         },
-        Change::Restore(earlier) => match parent.as_deref() {
-            Some(ours) => (Changed::ByPath(union(ours, earlier)?), None),
-            None => return move_ref(earlier, None),
-        },
+        Change::Add(additions) => (Changed::ByPath(add(parent.as_deref(), additions)?), None),
     };
     if changed.is_empty() {
         return Ok(Attempt::Written);
@@ -422,14 +419,7 @@ impl Changed {
 fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
     let our_files = note_files(ours)?;
     let their_files = note_files(theirs)?;
-    let mut depths = [0usize; FANOUT + 1];
-    for file in our_files.values() {
-        depths[file.path.matches('/').count().min(FANOUT)] += 1;
-    }
-    // The depth that most notes of ours are at, if ours has any.
-    let depth = (0..=FANOUT)
-        .filter(|&d| depths[d] > 0)
-        .max_by_key(|&d| depths[d]);
+    let depth = fanout(&our_files);
     // Each note of theirs that differs from ours, with ours if any.
     let differing: Vec<(&str, Option<&NoteFile>, &NoteFile)> = their_files
         .iter()
@@ -461,6 +451,62 @@ fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
         }
     }
     Ok(changed)
+}
+
+/// The notes of the notes commit `ours`, if any, that `additions` changes, by their path in its
+/// tree: each with its lines and those that `additions` gives for its commit. A note that `ours`
+/// lacks goes at the fanout of the notes of `ours`.
+fn add(ours: Option<&str>, additions: &Notes) -> Result<Notes, Error> {
+    let our_files = match ours {
+        Some(ours) => note_files(ours)?,
+        None => BTreeMap::new(),
+    };
+    let depth = fanout(&our_files).unwrap_or(0);
+    let blobs: Vec<&str> = additions
+        .keys()
+        .filter_map(|commit| our_files.get(commit))
+        .map(|file| file.blob.as_str())
+        .collect();
+    let mut contents = runner::cat_file(&blobs).map_err(Error::Read)?.into_iter();
+    let mut changed = Notes::new();
+    for (commit, added) in additions {
+        let (path, mut note) = match our_files.get(commit) {
+            Some(file) => (
+                file.path.clone(),
+                lines(&contents.next().flatten().unwrap_or_default()),
+            ),
+            None => (note_path(commit, depth), BTreeSet::new()),
+        };
+        let before = note.len();
+        note.extend(added.iter().cloned());
+        if note.len() != before {
+            changed.insert(path, note);
+        }
+    }
+    Ok(changed)
+}
+
+/// The depth of fanout that most of `files` are at, if there are any.
+fn fanout(files: &BTreeMap<String, NoteFile>) -> Option<usize> {
+    let mut depths = [0usize; FANOUT + 1];
+    for file in files.values() {
+        depths[file.path.matches('/').count().min(FANOUT)] += 1;
+    }
+    (0..=FANOUT)
+        .filter(|&d| depths[d] > 0)
+        .max_by_key(|&d| depths[d])
+}
+
+/// Every note of the notes commit `notes`, by the commit it annotates.
+pub(crate) fn all_notes(notes: &str) -> Result<Notes, Error> {
+    let files = note_files(notes)?;
+    let blobs: Vec<&str> = files.values().map(|file| file.blob.as_str()).collect();
+    let contents = runner::cat_file(&blobs).map_err(Error::Read)?;
+    Ok(files
+        .into_keys()
+        .zip(contents)
+        .map(|(commit, text)| (commit, lines(&text.unwrap_or_default())))
+        .collect())
 }
 
 /// A note as a file of the notes tree.
