@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{LOCK_PATIENCE, Lock, REF, Retry, progress};
+use crate::{Lock, REF, Retry, lock_patience, progress};
 
 /// How often a program says what it waits for, once it has waited that long.
 pub const EVERY: Duration = Duration::from_secs(1);
@@ -36,25 +36,23 @@ pub fn line(elapsed: Duration, stop: &str) -> String {
     }
 }
 
-/// What to do about `lock`, once it has been held for `STALE`: git holds the lock of a ref for
-/// moments only, and one that has been there that long was most likely left by a git ended by
-/// `SIGKILL`, which git then refuses to take as well. The writer retries until it has been held
-/// for `LOCK_PATIENCE`, since a git on a slow filesystem may yet let go of it.
-fn stale(lock: Option<&Lock>) -> Option<String> {
-    let lock = lock?;
-    let age = lock.modified?.elapsed().ok()?;
-    (age >= STALE).then(|| {
+/// What to do about `lock`, watched held since `since`, once that is a third of `lock_patience`:
+/// git holds the lock of a ref for moments only, and one that has been there that long was most
+/// likely left by a git ended by `SIGKILL`, which git then refuses to take as well. The writer
+/// retries until the whole of `lock_patience`, since a git on a slow filesystem may yet let go
+/// of it.
+fn stale(lock: Option<&(Lock, Instant)>) -> Option<String> {
+    let (lock, since) = lock?;
+    let held = since.elapsed();
+    (held >= lock_patience() / 3).then(|| {
         format!(
-            "{} was taken {}s ago; if no git command is running, it was left behind, and removing it lets the write through; the write is given up once it has been held for {}s",
+            "{} has been held for {}s; if no git command is running, it was left behind, and removing it lets the write through; the write is given up once it has been held for {}s",
             lock.path.display(),
-            age.as_secs(),
-            LOCK_PATIENCE.as_secs()
+            held.as_secs(),
+            lock_patience().as_secs()
         )
     })
 }
-
-/// How long a lock is held before the writer says that it may have been left behind.
-pub const STALE: Duration = Duration::from_secs(10);
 
 /// Runs `work`, and says on standard error, after `prefix`, what it waits for every second once
 /// it has taken a second.

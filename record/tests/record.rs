@@ -275,7 +275,11 @@ fn reads_a_note_under_two_levels_of_fanout() {
 
 /// Runs `record` with `input`, whatever its outcome.
 fn run_record(repo: &Path, input: &str) -> std::process::Output {
-    let mut child = isolated(repo, RECORD, &[])
+    run_record_with(isolated(repo, RECORD, &[]), input)
+}
+
+fn run_record_with(mut command: Command, input: &str) -> std::process::Output {
+    let mut child = command
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -342,20 +346,15 @@ fn says_when_a_lock_may_have_been_left_behind() {
     let (dir, ids) = repo(["a", "b"]);
     let (repo, [a, b]) = (dir.path(), ids.each_ref());
     let release = lock_for_a_while(repo);
-    let lock = repo.join(".git/refs/notes/replaces.lock");
-    let taken = std::time::SystemTime::now() - std::time::Duration::from_secs(15);
-    std::fs::File::options()
-        .write(true)
-        .open(&lock)
-        .unwrap()
-        .set_modified(taken)
-        .unwrap();
-    let output = run_record(repo, &format!("{a} {b}\n"));
+    // Said once a third of the patience has passed, 1.5s here, before the lock goes at 2.5s.
+    let mut command = isolated(repo, RECORD, &[]);
+    command.env("REPLACES_INDEX_LOCK_PATIENCE_MS", "4500");
+    let output = run_record_with(command, &format!("{a} {b}\n"));
     release.join().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(
-        stderr.contains("replaces.lock was taken")
+        stderr.contains("replaces.lock has been held for")
             && stderr.contains("removing it lets the write through"),
         "{stderr}"
     );

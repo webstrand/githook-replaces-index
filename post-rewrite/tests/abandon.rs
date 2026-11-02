@@ -421,17 +421,12 @@ fn a_reftable_lock_held_for_a_while_is_waited_for() {
 fn a_lock_left_behind_abandons_the_rewrite() {
     let (repo, a, a2) = amended();
     let lock = notes_lock(repo.path());
+    // Left behind, as by a git that SIGKILL ended, and held for longer than the hook waits.
     fs::write(&lock, "").unwrap();
-    // Taken longer ago than the hook waits for, as by a git that SIGKILL ended.
-    let taken = std::time::SystemTime::now() - Duration::from_secs(60);
-    fs::File::options()
-        .write(true)
-        .open(&lock)
-        .unwrap()
-        .set_modified(taken)
-        .unwrap();
     let started = Instant::now();
-    let (stderr, _) = failing(hook(repo.path(), "amend", format!("{a} {a2}\n"), None));
+    let mut command = hook(repo.path(), "amend", format!("{a} {a2}\n"), None);
+    command.env("REPLACES_INDEX_LOCK_PATIENCE_MS", "1000");
+    let (stderr, _) = failing(command);
     assert!(started.elapsed() < Duration::from_secs(10), "{stderr}");
     assert!(
         stderr.contains("replaces.lock has been held for"),

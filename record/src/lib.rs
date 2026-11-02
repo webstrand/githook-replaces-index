@@ -50,11 +50,19 @@ const LONGEST_WAIT: Duration = Duration::from_secs(1);
 /// The refusals in a row, with no lock seen, after which a writer gives up.
 const REFUSALS: u32 = 3;
 
-/// How long a lock of the ref may have been held before a writer gives up. Git holds it for
+/// How long a writer watches a lock of the ref held before it gives up: 30 seconds, or the
+/// milliseconds that `REPLACES_INDEX_LOCK_PATIENCE_MS` gives, which the tests set. Git holds it for
 /// moments only, and gives up itself after 100 milliseconds, so that one held this long was most
 /// likely left behind by a git ended by `SIGKILL`. A writer that gives up keeps its rewrite as an
 /// abandoned record, which the next writer records once the lock is gone.
-pub const LOCK_PATIENCE: Duration = Duration::from_secs(30);
+pub fn lock_patience() -> Duration {
+    static PATIENCE: OnceLock<Duration> = OnceLock::new();
+    *PATIENCE.get_or_init(|| {
+        std::env::var_os("REPLACES_INDEX_LOCK_PATIENCE_MS")
+            .and_then(|ms| ms.to_str()?.parse().ok())
+            .map_or(Duration::from_secs(30), Duration::from_millis)
+    })
+}
 
 /// The replacements of a rewrite, each from the commit it was made from to the commit it made, in
 /// the order the rewrite reported them.
@@ -217,23 +225,18 @@ fn write(change: Change, written: impl FnOnce()) -> Result<(), Error> {
                     Some((last, since)) if *last == found => *since,
                     _ => Instant::now(),
                 };
-                // Held since it was written, or since it was first seen, whichever is longer:
-                // a lock whose time is of a clock that runs ahead, as on a network filesystem,
-                // is given up on all the same, and one that lags is given up on early, as git
-                // gives up on any. The lock itself is never taken or removed.
-                let held = found
-                    .modified
-                    .and_then(|modified| modified.elapsed().ok())
-                    .unwrap_or_default()
-                    .max(since.elapsed());
-                if held >= LOCK_PATIENCE {
+                // Held for as long as this writer has watched it, by its own clock, which no
+                // clock of another machine, as on a network filesystem, puts out. The lock
+                // itself is never taken or removed.
+                let held = since.elapsed();
+                if held >= lock_patience() {
                     return Err(Error::Locked {
                         path: found.path,
                         seconds: held.as_secs(),
                     });
                 }
                 seen = Some((found.clone(), since));
-                lock = Some(found);
+                lock = Some((found, since));
                 Retry::Locked
             }
             // A lock may be let go of between the refusal and the look for it, so that only a
@@ -265,15 +268,17 @@ pub struct Progress {
     pub attempt: u32,
     /// Why the writer retries, once an attempt has failed.
     pub retrying: Option<Retry>,
-    /// The lock that the last attempt found held, if any.
-    pub lock: Option<Lock>,
+    /// The lock that the last attempt found held, if any, and since when this writer has watched
+    /// it.
+    pub lock: Option<(Lock, Instant)>,
 }
 
 /// A lock file that another process holds, or that a process ended by `SIGKILL` left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lock {
     pub path: PathBuf,
-    /// When it was last written, which git does as it takes the lock.
+    /// When it was last written, which git does as it takes the lock: a lock with another time is
+    /// another lock, taken since.
     pub modified: Option<SystemTime>,
 }
 
