@@ -21,7 +21,9 @@ use std::io::{self, Write};
 use runner::git;
 use runner::refspec::Refspec;
 
-use crate::{Change, Error, Notes, REF, REPLACES, all_notes, is_id, lines, notes_commit, write};
+use crate::{
+    Change, Error, Notes, REF, REPLACES, all_notes, is_id, lines, named, notes_commit, write,
+};
 
 /// The ref that holds the commit up to which the reflog was checked.
 const CHECKED: &str = "refs/replaces-index/checked";
@@ -172,10 +174,9 @@ fn placed(
                 Some(notes) => notes,
                 None => notes.insert(all_notes(current)?),
             };
-            let line = format!("{REPLACES}{commit}").into_bytes();
             notes
                 .iter()
-                .filter(|(_, note)| note.contains(&line))
+                .filter(|(_, note)| note.iter().any(|line| named(line) == Some(&commit)))
                 .map(|(namer, _)| namer.clone())
                 .collect()
         };

@@ -117,6 +117,15 @@ impl Rewrite {
 /// need not be UTF-8: a note from another clone, or one written by hand, may hold any.
 pub(crate) type Notes = BTreeMap<String, BTreeSet<Vec<u8>>>;
 
+/// The commit that the line `line` of a note names in a `replaces:` line, if it names one. A line
+/// written by hand may end in spaces or a carriage return.
+pub fn named(line: &[u8]) -> Option<&str> {
+    let id = std::str::from_utf8(line.strip_prefix(REPLACES.as_bytes())?)
+        .ok()?
+        .trim();
+    is_id(id).then_some(id)
+}
+
 /// The lines of the note `text`, each without its `\n`.
 pub(crate) fn lines(text: &[u8]) -> BTreeSet<Vec<u8>> {
     let text = text.strip_suffix(b"\n").unwrap_or(text);
@@ -556,14 +565,8 @@ fn collect(ours: &str) -> Result<(Notes, Vec<String>, usize), Error> {
     let present = runner::commits(notes.keys().map(String::as_str)).map_err(Error::Read)?;
     let mut named_by: HashMap<&str, Vec<&str>> = HashMap::new();
     for (commit, note) in &notes {
-        for line in note {
-            let named = line
-                .strip_prefix(REPLACES.as_bytes())
-                .and_then(|id| std::str::from_utf8(id).ok())
-                .filter(|id| is_id(id));
-            if let Some(named) = named {
-                named_by.entry(named).or_default().push(commit);
-            }
+        for named in note.iter().filter_map(|line| named(line)) {
+            named_by.entry(named).or_default().push(commit);
         }
     }
     let mut additions = Notes::new();
@@ -835,6 +838,16 @@ fn stream(ident: &[u8], parent: Option<&str>, theirs: Option<&str>, notes: &Chan
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_replaces_line_written_by_hand_names_its_commit() {
+        let id = "a".repeat(40);
+        for line in [format!("replaces: {id}"), format!("replaces: {id} \r")] {
+            assert_eq!(named(line.as_bytes()), Some(id.as_str()));
+        }
+        assert_eq!(named(b"replaces: abc"), None);
+        assert_eq!(named(format!("other: {id}").as_bytes()), None);
+    }
 
     fn notes(entries: &[(&str, &[&str])]) -> Notes {
         entries

@@ -25,7 +25,7 @@ use redb::{
     Database, DatabaseError, MultimapTableDefinition, ReadOnlyDatabase, ReadableDatabase,
     TableDefinition,
 };
-use replaces_index_record::{REPLACES, is_id};
+use replaces_index_record::{is_id, named};
 
 pub use crate::error::Error;
 
@@ -313,13 +313,7 @@ fn update(db: &Database, path: &std::path::Path, notes: Option<&str>) -> Result<
             .map_err(|e| err(e.into()))?;
         for (commit, text) in commits.iter().zip(&contents) {
             let text = text.as_deref().unwrap_or_default();
-            // A line that names no commit id, as one written by hand may, records nothing.
-            let olds = text
-                .split(|&b| b == b'\n')
-                .filter_map(|line| line.strip_prefix(REPLACES.as_bytes()))
-                .filter_map(|old| std::str::from_utf8(old).ok())
-                .map(str::trim)
-                .filter(|old| is_id(old));
+            let olds = text.split(|&b| b == b'\n').filter_map(named);
             for old in olds {
                 if old == commit {
                     continue;
