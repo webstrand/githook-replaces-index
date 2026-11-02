@@ -13,10 +13,10 @@
 mod error;
 
 use std::collections::HashMap;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Write};
 use std::path::Path;
-use std::process::ExitCode;
+use std::process::{self, ExitCode};
 use std::sync::Mutex;
 
 use clap::Parser;
@@ -63,12 +63,28 @@ fn run() -> Result<(), Error> {
         post_rewrite(Kind::FilterRepo, &replacements, &Mutex::new(None))
     })
     .map_err(|failure| Error::Record(failure.error))?;
-    // The copy is kept only once the map is recorded, so that a failed run is retried in full.
-    fs::copy(&map_path, &prev_path).map_err(|source| Error::Keep {
+    // The copy is kept only once the map is recorded, so that a failed run is retried in full, and
+    // through a rename, so that a run that ends while writing it leaves the previous copy whole.
+    keep(&prev_path, map.as_bytes()).map_err(|source| Error::Keep {
         path: prev_path,
         source,
     })?;
     Ok(())
+}
+
+fn keep(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let temporary = path.with_file_name(format!(".replaces-index-commit-map.{}", process::id()));
+    let kept = write(&temporary, contents).and_then(|()| fs::rename(&temporary, path));
+    if kept.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    kept
+}
+
+fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let mut file = File::create(path)?;
+    file.write_all(contents)?;
+    file.sync_all()
 }
 
 fn read_or_empty(path: &Path) -> Result<String, Error> {
