@@ -25,8 +25,7 @@ use redb::{
     Database, DatabaseError, MultimapTableDefinition, ReadOnlyDatabase, ReadableDatabase,
     TableDefinition,
 };
-use replaces_index_record::{REF, REPLACES, is_id};
-use runner::git;
+use replaces_index_record::{REPLACES, is_id};
 
 pub use crate::error::Error;
 
@@ -60,7 +59,7 @@ impl Index {
             source,
         })?;
         let path = dir.join("index.redb");
-        let notes = notes_commit()?;
+        let notes = replaces_index_record::notes_commit().map_err(Error::Ref)?;
         let mut deadline = Instant::now() + PATIENCE;
         loop {
             match open_current(&path, notes.as_deref())? {
@@ -257,18 +256,6 @@ fn indexed_notes(db: &impl ReadableDatabase) -> Result<Option<String>, redb::Err
         Err(err) => return Err(err.into()),
     };
     Ok(meta.get(NOTES)?.map(|id| id.value().to_owned()))
-}
-
-/// The commit of the notes ref, if it exists.
-fn notes_commit() -> Result<Option<String>, Error> {
-    let mut rev_parse = git(["rev-parse", "-q", "--verify", &format!("{REF}^{{commit}}")]);
-    let output = runner::run(&mut rev_parse).map_err(Error::Notes)?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let id = runner::text(&rev_parse, output.stdout).map_err(Error::Notes)?;
-    let id = id.trim();
-    Ok((!id.is_empty()).then(|| id.to_owned()))
 }
 
 /// Brings `db` up to date with the notes commit `notes`.

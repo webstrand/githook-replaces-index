@@ -683,8 +683,8 @@ fn refs_lock() -> Result<Option<Lock>, Error> {
     }))
 }
 
-/// The commit that the ref points to, if it exists.
-fn notes_commit() -> Result<Option<String>, Error> {
+/// The commit that the ref points to, if it exists; a failure when it points to another object.
+pub fn notes_commit() -> Result<Option<String>, Error> {
     let format = "--format=%(objectname) %(objecttype)";
     let out = runner::stdout(&mut git(["for-each-ref", format, REF])).map_err(Error::Read)?;
     let Some((id, kind)) = out.trim().split_once(' ') else {

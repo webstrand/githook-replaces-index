@@ -90,4 +90,11 @@ fn tells_what_the_new_chain_holds_of_each_commit() {
             entry(&b0, Status::Held(vec![b.clone()])),
         ]
     );
+
+    // A notes ref that points to a tag is refused, as the writers refuse it.
+    git(&["tag", "-a", "-m", "notes", "notes", "refs/notes/replaces"]);
+    let tag = git(&["rev-parse", "refs/tags/notes"]);
+    git(&["update-ref", "refs/notes/replaces", &tag]);
+    let err = compare("old", "new").unwrap_err().to_string();
+    assert!(err.contains("which is not a commit"), "{err}");
 }

@@ -12,6 +12,8 @@ pub enum Error {
     CreateDir { path: PathBuf, source: io::Error },
     #[error("could not read {REF}: {0}")]
     Notes(#[source] runner::Error),
+    #[error("{0}")]
+    Ref(#[source] replaces_index_record::Error),
     #[error("could not move the index built into place at {}: {source}", path.display())]
     Replace { path: PathBuf, source: io::Error },
     #[error("{} stayed locked by another process", .0.display())]
