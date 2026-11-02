@@ -91,11 +91,8 @@ pub fn whereis(name: &str) -> Result<Vec<Related>, Error> {
 
 /// The full id of `name`: a commit of this clone, or a prefix of exactly one commit of the index.
 fn resolve(index: &Index, name: &str) -> Result<String, Error> {
-    let mut rev_parse = git(["rev-parse", "-q", "--verify", &format!("{name}^{{commit}}")]);
-    let local = runner::run(&mut rev_parse).map_err(Error::Resolve)?;
-    if local.status.success() {
-        let id = runner::text(&rev_parse, local.stdout).map_err(Error::Resolve)?;
-        return Ok(id.trim().to_owned());
+    if let Some(id) = runner::resolve(&format!("{name}^{{commit}}")).map_err(Error::Resolve)? {
+        return Ok(id);
     }
     let mut matches = index
         .with_prefix(&name.to_ascii_lowercase())

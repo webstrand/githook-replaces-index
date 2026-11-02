@@ -131,17 +131,8 @@ pub fn repair() -> Result<Repaired, Error> {
     Ok(repaired)
 }
 
-/// The object that the ref `name` points to, if it exists.
 fn read_ref(name: &str) -> Result<Option<String>, Error> {
-    let mut rev_parse = git(["rev-parse", "--verify", "--quiet", name]);
-    let output = runner::run(&mut rev_parse).map_err(Error::Read)?;
-    // rev-parse --verify --quiet exits with 1 when the ref does not exist.
-    if output.status.code() == Some(1) {
-        return Ok(None);
-    }
-    runner::check(&rev_parse, &output).map_err(Error::Read)?;
-    let id = runner::text(&rev_parse, output.stdout).map_err(Error::Read)?;
-    Ok(Some(id.trim().to_owned()))
+    runner::resolve(name).map_err(Error::Read)
 }
 
 /// Where the lines that `steps` dropped go, as lines to add by commit, and the commits whose own

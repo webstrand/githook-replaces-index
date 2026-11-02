@@ -1,6 +1,6 @@
 //! The fetch refspecs of the remotes, as the config of the repository holds them.
 
-use crate::{Error, check, git, run, text};
+use crate::{Error, git, output, success_or_absent, text};
 
 /// A fetch refspec of a remote: `[+]<src>:<dst>`, or `^<src>`, which excludes the refs that
 /// `<src>` matches from the other refspecs of the remote.
@@ -74,12 +74,8 @@ fn matched<'a>(pattern: &str, name: &'a str) -> Option<&'a str> {
 /// Every fetch refspec of every remote, in the order the config holds them.
 pub fn fetch_refspecs() -> Result<Vec<Refspec>, Error> {
     let mut config = git(["config", "-z", "--get-regexp", r"^remote\..*\.fetch$"]);
-    let output = run(&mut config)?;
-    // git config exits with 1 when no remote has a fetch refspec.
-    if output.status.code() == Some(1) {
-        return Ok(Vec::new());
-    }
-    check(&config, &output)?;
+    // git config exits with 1 when no remote has a fetch refspec, and prints nothing.
+    let output = output(&mut config, None, success_or_absent)?;
     let out = text(&config, output.stdout)?;
     // `remote.<name>.fetch\n<refspec>\0` for each refspec.
     Ok(out

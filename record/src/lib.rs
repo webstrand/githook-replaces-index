@@ -423,9 +423,8 @@ fn move_ref(new: &str, parent: Option<&str>) -> Result<Attempt, Error> {
         new,
         parent.unwrap_or(""),
     ]);
-    let output = runner::run(&mut update).map_err(Error::Write)?;
-    match runner::check(&update, &output) {
-        Ok(()) => Ok(Attempt::Written),
+    match runner::output(&mut update, None, runner::success) {
+        Ok(_) => Ok(Attempt::Written),
         Err(err) => refused(parent, err),
     }
 }

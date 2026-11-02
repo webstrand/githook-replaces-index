@@ -7,24 +7,26 @@ use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
 
-/// A program that could not be run, or that failed.
+use command_error::{ChildContext, ChildExt, CommandExt};
+
+/// A program that could not be run, that failed, or whose output could not be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("could not run {command}: {source}")]
-    Spawn { command: String, source: io::Error },
-    #[error("could not pass input to {command}: {source}")]
-    Input { command: String, source: io::Error },
-    #[error("{command} printed what is not UTF-8, which this program cannot read yet")]
-    NotUtf8 { command: String },
-    #[error("{command} failed ({status}){}", stderr_suffix(.stderr))]
-    Failed {
+    #[error(transparent)]
+    Command(#[from] command_error::Error),
+    #[error("could not pass input to `{command}`")]
+    Input {
         command: String,
-        status: ExitStatus,
-        stderr: String,
+        #[source]
+        source: io::Error,
     },
+    #[error("`{command}` printed what is not UTF-8, which this program cannot read yet")]
+    NotUtf8 { command: String },
+    #[error("`{command}` printed what this program cannot read")]
+    Malformed { command: String },
 }
 
 /// A word that the shell reads back as `word`, whatever its bytes.
@@ -39,14 +41,6 @@ pub fn quote(word: &OsStr) -> OsString {
     }
     quoted.push(b'\'');
     OsString::from_vec(quoted)
-}
-
-fn stderr_suffix(stderr: &str) -> String {
-    if stderr.is_empty() {
-        String::new()
-    } else {
-        format!(": {stderr}")
-    }
 }
 
 pub fn git<I, S>(args: I) -> Command
@@ -93,7 +87,7 @@ pub fn stop() {
 }
 
 /// Starts `command`, unless the process is stopping.
-fn spawn(command: &mut Command) -> io::Result<Child> {
+fn spawn(command: &mut Command) -> Result<ChildContext<Child>, Error> {
     let mut children = children();
     if children.stopping {
         drop(children);
@@ -101,8 +95,10 @@ fn spawn(command: &mut Command) -> io::Result<Child> {
             std::thread::park();
         }
     }
-    let child = command.spawn()?;
-    children.running.push((child.id(), describe(command)));
+    let child = command.spawn_checked()?;
+    children
+        .running
+        .push((child.child().id(), describe(command)));
     Ok(child)
 }
 
@@ -115,58 +111,65 @@ pub fn running() -> Vec<String> {
         .collect()
 }
 
-/// Waits for `child` to end, with its output captured.
-fn wait(child: Child) -> io::Result<Output> {
-    let id = child.id();
-    let output = child.wait_with_output();
-    children().running.retain(|&(other, _)| other != id);
-    output
-}
-
-/// Runs a command to its end, with its output captured, whatever its exit status.
-pub fn run(command: &mut Command) -> Result<Output, Error> {
-    let described = describe(command);
-    let to_error = |source| Error::Spawn {
-        command: described.clone(),
-        source,
-    };
+/// Runs `command` to its end, with `input`, if any, as its standard input, and its output
+/// captured; a failure unless `succeeded` takes the output for success.
+pub fn output(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    succeeded: impl Fn(&Output) -> bool,
+) -> Result<Output, Error> {
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = spawn(command).map_err(to_error)?;
-    wait(child).map_err(to_error)
-}
-
-/// Runs a command to its end with `input` as its standard input, with its output captured,
-/// whatever its exit status.
-pub fn run_with_input(command: &mut Command, input: &[u8]) -> Result<Output, Error> {
-    let described = describe(command);
-    let spawn_error = |source| Error::Spawn {
-        command: described.clone(),
-        source,
-    };
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = spawn(command).map_err(spawn_error)?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let mut child = spawn(command)?;
+    let id = child.child().id();
+    let stdin = child.child_mut().stdin.take();
     // Written beside the reads of the output, so that neither side waits on a full pipe.
-    let written = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || stdin.write_all(input));
-        let output = wait(child);
-        (writer.join().expect("the writer does not panic"), output)
+    let (written, output) = std::thread::scope(|scope| {
+        let writer = stdin
+            .zip(input)
+            .map(|(mut stdin, input)| scope.spawn(move || stdin.write_all(input)));
+        let output = child.output_checked_with(|output: &Output| {
+            if succeeded(output) {
+                Ok(())
+            } else {
+                Err(None::<String>)
+            }
+        });
+        let written = writer.map(|writer| writer.join().expect("the writer does not panic"));
+        (written, output)
     });
-    let output = written.1.map_err(spawn_error)?;
+    children().running.retain(|&(other, _)| other != id);
+    let output = output?;
     // A program that exits without reading all of its input has failed, and says why.
-    match written.0 {
-        Err(source) if source.kind() != io::ErrorKind::BrokenPipe => Err(Error::Input {
-            command: described,
+    match written {
+        Some(Err(source)) if source.kind() != io::ErrorKind::BrokenPipe => Err(Error::Input {
+            command: describe(command),
             source,
         }),
         _ => Ok(output),
     }
+}
+
+/// Runs a command to its end, with its output captured, whatever its exit status.
+pub fn run(command: &mut Command) -> Result<Output, Error> {
+    output(command, None, |_| true)
+}
+
+/// Whether `output` is that of a command that succeeded.
+pub fn success(output: &Output) -> bool {
+    output.status.success()
+}
+
+/// Whether `output` is that of a command that succeeded, or that exited with 1, as git does to
+/// say that what was asked for does not exist.
+pub fn success_or_absent(output: &Output) -> bool {
+    output.status.success() || output.status.code() == Some(1)
 }
 
 /// Runs a command with `input` as its standard input, and returns its standard output when it
@@ -204,16 +207,12 @@ pub fn nul_fields(output: &[u8]) -> impl Iterator<Item = Option<&str>> {
 /// Runs a command with `input` as its standard input, and returns its standard output as the
 /// bytes it wrote when it succeeds.
 pub fn stdout_bytes_with_input(command: &mut Command, input: &[u8]) -> Result<Vec<u8>, Error> {
-    let output = run_with_input(command, input)?;
-    check(command, &output)?;
-    Ok(output.stdout)
+    Ok(output(command, Some(input), success)?.stdout)
 }
 
 /// Runs a command, and returns its standard output as the bytes it wrote when it succeeds.
 pub fn stdout_bytes(command: &mut Command) -> Result<Vec<u8>, Error> {
-    let output = run(command)?;
-    check(command, &output)?;
-    Ok(output.stdout)
+    Ok(output(command, None, success)?.stdout)
 }
 
 /// Those of the full ids `ids` that name a commit of the repository, by one `git cat-file`.
@@ -236,12 +235,19 @@ pub fn commits<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<HashSet<Str
 /// tell, as for a commit the repository lacks.
 pub fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
     let mut command = git(["merge-base", "--is-ancestor", ancestor, descendant]);
-    let output = run(&mut command)?;
-    if output.status.code() == Some(1) {
-        return Ok(false);
+    Ok(output(&mut command, None, success_or_absent)?
+        .status
+        .success())
+}
+
+/// The object that `name` names, by `git rev-parse --verify`; none when it names none.
+pub fn resolve(name: &str) -> Result<Option<String>, Error> {
+    let mut command = git(["rev-parse", "--verify", "--quiet", name]);
+    let output = output(&mut command, None, success_or_absent)?;
+    if !output.status.success() {
+        return Ok(None);
     }
-    check(&command, &output)?;
-    Ok(true)
+    Ok(Some(text(&command, output.stdout)?.trim().to_owned()))
 }
 
 /// Runs a command for its effect.
@@ -249,36 +255,22 @@ pub fn status(command: &mut Command) -> Result<(), Error> {
     stdout(command).map(drop)
 }
 
-/// The failure of a command that ran, if it failed.
-pub fn check(command: &Command, output: &Output) -> Result<(), Error> {
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(Error::Failed {
-        command: describe(command),
-        status: output.status,
-        // TODO(EuString): for a message only; bytes that are not UTF-8 are shown lossily.
-        stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-    })
-}
-
 /// The output of `git rev-parse` for one of its path options, such as `--git-path <path>`.
 pub fn rev_parse_path(args: &[&str]) -> Result<PathBuf, Error> {
     let mut paths = rev_parse_paths(args)?;
-    Ok(if paths.is_empty() {
-        PathBuf::new()
-    } else {
-        paths.swap_remove(0)
-    })
+    if paths.is_empty() {
+        return Err(Error::Malformed {
+            command: describe(&git(["rev-parse"].iter().chain(args))),
+        });
+    }
+    Ok(paths.swap_remove(0))
 }
 
 /// The output of `git rev-parse` for its path options, one path per line, as the bytes git prints:
 /// a path need not be UTF-8, and one read as text would name another.
 pub fn rev_parse_paths(args: &[&str]) -> Result<Vec<PathBuf>, Error> {
     let mut command = git(["rev-parse"].iter().chain(args));
-    let output = run(&mut command)?;
-    check(&command, &output)?;
-    Ok(output
+    Ok(output(&mut command, None, success)?
         .stdout
         .split(|&b| b == b'\n')
         .filter(|line| !line.is_empty())
@@ -298,12 +290,9 @@ pub struct Changed {
 /// `git diff-tree -r -z --no-renames`. A file whose path is not UTF-8 is left out.
 pub fn diff_tree(from: &str, to: &str) -> Result<Vec<Changed>, Error> {
     let mut command = git(["diff-tree", "-r", "-z", "--no-renames", from, to]);
-    let output = run(&mut command)?;
-    check(&command, &output)?;
-    let malformed = || Error::Failed {
+    let output = output(&mut command, None, success)?;
+    let malformed = || Error::Malformed {
         command: describe(&command),
-        status: output.status,
-        stderr: "its output could not be read".to_owned(),
     };
     // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each file that changed.
     let mut fields = nul_fields(&output.stdout);
@@ -340,12 +329,9 @@ pub fn cat_file<S: AsRef<str>>(ids: &[S]) -> Result<Vec<Option<Vec<u8>>>, Error>
     }
     let input: String = ids.iter().map(|id| format!("{}\n", id.as_ref())).collect();
     let mut command = git(["cat-file", "--batch"]);
-    let output = run_with_input(&mut command, input.as_bytes())?;
-    check(&command, &output)?;
-    let malformed = || Error::Failed {
+    let output = output(&mut command, Some(input.as_bytes()), success)?;
+    let malformed = || Error::Malformed {
         command: describe(&command),
-        status: output.status,
-        stderr: "its output could not be read".to_owned(),
     };
     // Each object is `<id> <type> <size>\n<contents>\n`, or `<name> missing\n` or
     // `<name> ambiguous\n`.
@@ -376,12 +362,12 @@ pub fn cat_file<S: AsRef<str>>(ids: &[S]) -> Result<Vec<Option<Vec<u8>>>, Error>
     Ok(objects)
 }
 
-/// The program and its arguments, joined by spaces and unquoted, for messages.
+/// The program and its arguments, as the shell reads them back, for messages.
 pub fn describe(command: &Command) -> String {
-    std::iter::once(command.get_program())
+    let words: Vec<_> = std::iter::once(command.get_program())
         .chain(command.get_args())
         // TODO(EuString): for a message only; bytes that are not UTF-8 are shown lossily.
         .map(|arg| arg.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect();
+    shell_words::join(words)
 }
