@@ -21,10 +21,7 @@ fn main() -> ExitCode {
     let pulled =
         heartbeat::while_running("pull-replaces", "Ctrl-C to give up", || pull(&cli.remote));
     match pulled {
-        Ok(Pulled::Merged) => {
-            replaces_index_record::repair_and_say("pull-replaces");
-            ExitCode::SUCCESS
-        }
+        Ok(Pulled::Merged) => ExitCode::SUCCESS,
         Ok(Pulled::Absent) => {
             eprintln!("pull-replaces: {} has no {REF}", cli.remote);
             ExitCode::SUCCESS

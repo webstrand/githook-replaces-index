@@ -283,7 +283,6 @@ fn instead(refspec: &Refspec) -> String {
 /// Repairs the notes, and says on standard error, after `prefix`, what the repair put back, or
 /// why it could not check them; a failure to check does not stop the program.
 pub fn repair_and_say(prefix: &str) {
-    check_refspecs(prefix);
     let mut stderr = io::stderr();
     match repair() {
         Ok(repaired) => {

@@ -1,18 +1,120 @@
 //! Lines are only ever added to the notes, so a step of the reflog of the notes ref that drops one
-//! was made by a writer that overwrote another, and the hook puts the lines back.
-
-mod common;
+//! was made by a writer that overwrote another, and `git gc-replaces` puts the lines back.
 
 use std::path::Path;
+use std::process::{Command, Stdio};
 
-use common::{amend_of, amended, commit, git, hook, note, ok, ok_command, repo};
+const RECORD: &str = env!("CARGO_BIN_EXE_replaces-index-record");
 
-/// Runs the hook on a single-commit rewrite of `old` into `new`, which must succeed, and returns
-/// its standard error.
-fn rewrite_single(repo: &Path, old: &str, new: &str) -> String {
-    let output = hook(repo, "amend", format!("{old} {new}\n"), None)
+/// A git command in `repo`, isolated from the configuration and the session around the test.
+fn git(repo: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(repo).args(args);
+    isolate(&mut command);
+    command
+}
+
+fn isolate(command: &mut Command) {
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_NOTES_REF");
+}
+
+fn ok_command(mut command: Command) -> String {
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{command:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim_end()
+        .to_owned()
+}
+
+fn ok(repo: &Path, args: &[&str]) -> String {
+    ok_command(git(repo, args))
+}
+
+fn repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    ok(dir.path(), &["init", "-q"]);
+    ok(dir.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
+    dir
+}
+
+fn commit(repo: &Path, name: &str) -> String {
+    std::fs::write(repo.join(name), name).unwrap();
+    ok(repo, &["add", name]);
+    ok(repo, &["commit", "-q", "-m", name]);
+    ok(repo, &["rev-parse", "HEAD"])
+}
+
+/// The lines of the note of `commit`, sorted.
+fn note(repo: &Path, commit: &str) -> Vec<String> {
+    let output = git(repo, &["notes", "--ref=replaces", "show", commit])
         .output()
         .unwrap();
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A scratch repository with a commit `a` and a commit made from it as `git commit --amend` makes
+/// it, and their ids.
+fn amended() -> (tempfile::TempDir, String, String) {
+    let repo = repo();
+    let a = commit(repo.path(), "a");
+    let a2 = amend_of(repo.path(), "HEAD");
+    (repo, a, a2)
+}
+
+/// A commit made from `commit` as `git commit --amend` makes it.
+fn amend_of(repo: &Path, commit: &str) -> String {
+    let parent = format!("{commit}~");
+    let tree = format!("{commit}^{{tree}}");
+    let message = format!("{commit}, amended");
+    ok(repo, &["commit-tree", &tree, "-p", &parent, "-m", &message])
+}
+
+/// Records that `new` replaces `old`, which must succeed.
+fn record(repo: &Path, old: &str, new: &str) {
+    let mut command = Command::new(RECORD);
+    command.current_dir(repo).stdin(Stdio::piped());
+    isolate(&mut command);
+    let mut child = command.spawn().unwrap();
+    use std::io::Write;
+    let input = format!("{old} {new}\n");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Runs `git gc-replaces`, which must succeed, and returns its standard error.
+fn gc(repo: &Path) -> String {
+    let mut command = Command::new(RECORD);
+    command.current_dir(repo).arg("--gc");
+    isolate(&mut command);
+    let output = command.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(output.status.success(), "{stderr}");
     stderr
@@ -51,35 +153,32 @@ fn lines_that_another_writer_dropped_are_put_back() {
     let (repo, a, a2) = amended();
     let x = commit(repo.path(), "x");
     let x2 = amend_of(repo.path(), &x);
-    rewrite_single(repo.path(), &x, &x2);
-    rewrite_single(repo.path(), &a, &a2);
+    record(repo.path(), &x, &x2);
+    record(repo.path(), &a, &a2);
     overwrite(repo.path(), &x);
     assert!(note(repo.path(), &a2).is_empty());
-
     let b = commit(repo.path(), "b");
     let b2 = amend_of(repo.path(), &b);
-    let stderr = rewrite_single(repo.path(), &b, &b2);
+    record(repo.path(), &b, &b2);
+
+    let stderr = gc(repo.path());
     assert!(stderr.contains("put back"), "{stderr}");
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
-    // What the other writer added, and what the hook recorded since, stay.
+    // What the other writer added, and what was recorded since, stay.
     assert_eq!(note(repo.path(), &x), ["other"]);
     assert_eq!(note(repo.path(), &b2), [format!("replaces: {b}")]);
 
     // The step is put right once.
-    let c = commit(repo.path(), "c");
-    let c2 = amend_of(repo.path(), &c);
-    let stderr = rewrite_single(repo.path(), &c, &c2);
+    let stderr = gc(repo.path());
     assert!(!stderr.contains("put back"), "{stderr}");
 }
 
 #[test]
 fn a_note_removed_by_hand_is_put_back() {
     let (repo, a, a2) = amended();
-    rewrite_single(repo.path(), &a, &a2);
+    record(repo.path(), &a, &a2);
     ok(repo.path(), &["notes", "--ref=replaces", "remove", &a2]);
-    let b = commit(repo.path(), "b");
-    let b2 = amend_of(repo.path(), &b);
-    let stderr = rewrite_single(repo.path(), &b, &b2);
+    let stderr = gc(repo.path());
     assert!(stderr.contains("put back"), "{stderr}");
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
 }
@@ -87,9 +186,10 @@ fn a_note_removed_by_hand_is_put_back() {
 #[test]
 fn writes_that_only_add_lines_are_left_alone() {
     let (repo, a, a2) = amended();
-    rewrite_single(repo.path(), &a, &a2);
+    record(repo.path(), &a, &a2);
     let a3 = amend_of(repo.path(), &a2);
-    let stderr = rewrite_single(repo.path(), &a2, &a3);
+    record(repo.path(), &a2, &a3);
+    let stderr = gc(repo.path());
     assert_eq!(stderr, "");
     let writes = ok(repo.path(), &["rev-list", "--count", "refs/notes/replaces"]);
     assert_eq!(writes, "2");
@@ -101,14 +201,12 @@ fn a_clone_without_a_reflog_of_its_notes_is_not_checked() {
     ok(repo.path(), &["config", "core.logAllRefUpdates", "false"]);
     let x = commit(repo.path(), "x");
     let x2 = amend_of(repo.path(), &x);
-    rewrite_single(repo.path(), &x, &x2);
+    record(repo.path(), &x, &x2);
     let a = commit(repo.path(), "a");
     let a2 = amend_of(repo.path(), &a);
-    rewrite_single(repo.path(), &a, &a2);
+    record(repo.path(), &a, &a2);
     overwrite(repo.path(), &x);
-    let b = commit(repo.path(), "b");
-    let b2 = amend_of(repo.path(), &b);
-    let stderr = rewrite_single(repo.path(), &b, &b2);
+    let stderr = gc(repo.path());
     assert_eq!(stderr, "");
     assert!(note(repo.path(), &a2).is_empty());
 }
@@ -118,26 +216,21 @@ fn a_note_that_git_notes_add_overwrote_is_put_back() {
     let (repo, a, a2) = amended();
     let x = commit(repo.path(), "x");
     let x2 = amend_of(repo.path(), &x);
-    rewrite_single(repo.path(), &x, &x2);
+    record(repo.path(), &x, &x2);
     // While `git notes add` waits for its editor, the hook records a replacement. A git that moves
     // the ref without naming the commit it read then drops that note; one that names it refuses.
     let editor = repo.path().join("editor");
     std::fs::write(
         &editor,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' '{a} {a2}' | '{}' filter-repo\necho other > \"$1\"\n",
-            common::HOOK
-        ),
+        format!("#!/bin/sh\nprintf '%s\\n' '{a} {a2}' | '{RECORD}'\necho other > \"$1\"\n"),
     )
     .unwrap();
     std::fs::set_permissions(&editor, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let mut notes_add = common::git(repo.path(), &["notes", "--ref=replaces", "add", "-f", &x]);
+    let mut notes_add = git(repo.path(), &["notes", "--ref=replaces", "add", "-f", &x]);
     notes_add.env("GIT_EDITOR", &editor);
     let overwrote = notes_add.output().unwrap().status.success();
 
-    let b = commit(repo.path(), "b");
-    let b2 = amend_of(repo.path(), &b);
-    let stderr = rewrite_single(repo.path(), &b, &b2);
+    let stderr = gc(repo.path());
     // Only a git that overwrote the note leaves something to put back.
     assert_eq!(stderr.contains("put back"), overwrote, "{stderr}");
     assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
@@ -148,7 +241,7 @@ fn a_note_that_git_notes_add_overwrote_is_put_back() {
 fn notes_moved_to_another_fanout_are_left_alone() {
     let (repo, a, a2) = amended();
     let repo = repo.path();
-    rewrite_single(repo, &a, &a2);
+    record(repo, &a, &a2);
     // Moves the note one level of fanout down, as a writer does to every note once their number
     // reaches 256, which git diff-tree shows as a note removed and another added.
     let last = ok(repo, &["rev-parse", "refs/notes/replaces"]);
@@ -166,9 +259,7 @@ fn notes_moved_to_another_fanout_are_left_alone() {
     let moved = ok(repo, &["commit-tree", &tree, "-p", &last, "-m", "fanout"]);
     ok(repo, &["update-ref", "refs/notes/replaces", &moved, &last]);
 
-    let b = commit(repo, "b");
-    let b2 = amend_of(repo, &b);
-    let stderr = rewrite_single(repo, &b, &b2);
+    let stderr = gc(repo);
     assert!(!stderr.contains("put back"), "{stderr}");
     assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
 }
@@ -177,7 +268,7 @@ fn notes_moved_to_another_fanout_are_left_alone() {
 fn a_file_that_is_no_note_may_be_removed() {
     let (repo, a, a2) = amended();
     let repo = repo.path();
-    rewrite_single(repo, &a, &a2);
+    record(repo, &a, &a2);
     // Adds a file that is no note to the notes tree, then removes it.
     let index = repo.join(".git/other-index");
     let with_index = |args: &[&str]| {
@@ -203,21 +294,16 @@ fn a_file_that_is_no_note_may_be_removed() {
         ok(repo, &["update-ref", "refs/notes/replaces", &next, &last]);
     }
 
-    let b = commit(repo, "b");
-    let b2 = amend_of(repo, &b);
-    let stderr = rewrite_single(repo, &b, &b2);
+    let stderr = gc(repo);
     assert!(!stderr.contains("put back"), "{stderr}");
 }
 
-/// Records a rewrite, whose repair checks the notes as they are, then removes from `repo` every
-/// object that no ref reaches, as garbage collection does once the reflogs expire, and then the
-/// notes of the commits removed, as `git notes prune` does. A line that came and went between two
-/// checks, while the reflog expired, is beyond what the repair can see.
+/// Runs `git gc-replaces`, whose repair checks the notes as they are, then removes from `repo`
+/// every object that no ref reaches, as garbage collection does once the reflogs expire, and then
+/// the notes of the commits removed, as `git notes prune` does. A line that came and went between
+/// two checks, while the reflog expired, is beyond what the repair can see.
 fn collect_and_prune(repo: &Path) {
-    let c = commit(repo, "c");
-    let c2 = amend_of(repo, &c);
-    rewrite_single(repo, &c, &c2);
-    ok(repo, &["update-ref", "refs/heads/c", &c2]);
+    gc(repo);
     ok(repo, &["reflog", "expire", "--expire=now", "--all"]);
     ok(repo, &["gc", "-q", "--prune=now"]);
     ok(repo, &["notes", "--ref=replaces", "prune"]);
@@ -235,9 +321,9 @@ fn annotated(repo: &Path) -> Vec<String> {
 fn the_note_of_a_commit_gone_is_kept_in_the_notes_that_name_it() {
     let (repo, a, a2) = amended();
     let repo = repo.path();
-    rewrite_single(repo, &a, &a2);
+    record(repo, &a, &a2);
     let a3 = amend_of(repo, &a2);
-    rewrite_single(repo, &a2, &a3);
+    record(repo, &a2, &a3);
     ok(repo, &["update-ref", "refs/heads/kept", &a3]);
     // A line that the note of `a'` holds and that of `a''` lacks, as when the note of `a'` arrived
     // from another clone after `a''` was made.
@@ -249,9 +335,7 @@ fn the_note_of_a_commit_gone_is_kept_in_the_notes_that_name_it() {
     collect_and_prune(repo);
     assert!(!annotated(repo).contains(&a2));
 
-    let b = commit(repo, "b");
-    let b2 = amend_of(repo, &b);
-    let stderr = rewrite_single(repo, &b, &b2);
+    let stderr = gc(repo);
     assert!(
         stderr.contains(&format!("the note of {a2}, which this clone no longer has")),
         "{stderr}"
@@ -274,9 +358,7 @@ fn the_note_of_a_commit_gone_that_no_note_names_is_put_back() {
     collect_and_prune(repo);
     assert!(!annotated(repo).contains(&x));
 
-    let b = commit(repo, "b");
-    let b2 = amend_of(repo, &b);
-    let stderr = rewrite_single(repo, &b, &b2);
+    let stderr = gc(repo);
     assert!(stderr.contains("put back"), "{stderr}");
     assert!(annotated(repo).contains(&x));
 }
@@ -285,7 +367,8 @@ fn the_note_of_a_commit_gone_that_no_note_names_is_put_back() {
 fn a_step_after_the_reflog_expired_is_checked() {
     let (repo, a, a2) = amended();
     let repo = repo.path();
-    rewrite_single(repo, &a, &a2);
+    record(repo, &a, &a2);
+    gc(repo);
     // The reflog no longer holds the step that made the notes, and what checked them last is
     // unreachable once a writer forces the ref to notes without the note of `a'`.
     ok(repo, &["reflog", "expire", "--expire=now", "--all"]);
@@ -301,9 +384,7 @@ fn a_step_after_the_reflog_expired_is_checked() {
     ok(repo, &["gc", "-q", "--prune=now"]);
     assert!(note(repo, &a2).is_empty());
 
-    let b = commit(repo, "b");
-    let b2 = amend_of(repo, &b);
-    let stderr = rewrite_single(repo, &b, &b2);
+    let stderr = gc(repo);
     assert!(stderr.contains("put back"), "{stderr}");
     assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
 }

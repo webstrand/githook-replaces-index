@@ -112,12 +112,8 @@ fn leaves_the_ref_alone_when_nothing_changes() {
     let before = git(repo, &["rev-parse", REF]);
     record(repo, &format!("{a} {b}\n"));
     assert_eq!(git(repo, &["rev-parse", REF]), before);
-    // Nothing is left beside the notes ref, but the commit up to which the repair checked it.
-    let left = [
-        "for-each-ref",
-        "--exclude=refs/replaces-index/checked",
-        "refs/replaces-index/",
-    ];
+    // Nothing is left beside the notes ref.
+    let left = ["for-each-ref", "refs/replaces-index/"];
     assert_eq!(git(repo, &left).as_deref(), Some(""));
 }
 
