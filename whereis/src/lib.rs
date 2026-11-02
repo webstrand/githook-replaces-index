@@ -66,14 +66,22 @@ pub fn whereis(name: &str) -> Result<Vec<Related>, Error> {
     // The commit asked about, when a cycle of rewrites leads back to it, is listed as itself only.
     let from = from.into_iter().filter(|c| *c != commit);
     let into = into.into_iter().filter(|c| *c != commit);
-    let commits = from
+    let commits: Vec<(String, Relation)> = from
         .map(|c| (c, Relation::From))
         .chain([(commit.clone(), Relation::Itself)])
-        .chain(into.map(|c| (c, Relation::Into)));
+        .chain(into.map(|c| (c, Relation::Into)))
+        .collect();
+    let present = runner::commits(commits.iter().map(|(c, _)| c.as_str())).map_err(Error::Refs)?;
     commits
+        .into_iter()
         .map(|(commit, relation)| {
+            let held = if present.contains(&commit) {
+                held(&commit)?
+            } else {
+                Held::Missing
+            };
             Ok(Related {
-                held: held(&commit)?,
+                held,
                 commit,
                 relation,
             })
@@ -100,16 +108,8 @@ fn resolve(index: &Index, name: &str) -> Result<String, Error> {
     }
 }
 
+/// The refs that hold `commit`, which the clone has.
 fn held(commit: &str) -> Result<Held, Error> {
-    let exists = runner::run(&mut git([
-        "cat-file",
-        "-e",
-        &format!("{commit}^{{commit}}"),
-    ]))
-    .map_err(Error::Refs)?;
-    if !exists.status.success() {
-        return Ok(Held::Missing);
-    }
     let refs = runner::stdout(&mut git([
         "for-each-ref",
         "--format=%(refname) %(refname:short)",
