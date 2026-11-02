@@ -184,7 +184,7 @@ pub fn stdout(command: &mut Command) -> Result<String, Error> {
 
 /// `output` of `command` as text; a failure when it is not UTF-8, rather than text that names
 /// something else.
-// TODO(EuString): output that is not UTF-8 can be read as no text at all.
+// TODO(EuString): output that is not UTF-8 is refused rather than read.
 pub fn text(command: &Command, output: Vec<u8>) -> Result<String, Error> {
     String::from_utf8(output).map_err(|_| Error::NotUtf8 {
         command: describe(command),
@@ -257,7 +257,7 @@ pub fn check(command: &Command, output: &Output) -> Result<(), Error> {
     Err(Error::Failed {
         command: describe(command),
         status: output.status,
-        // TODO(EuString): for a message only, but bytes that are not UTF-8 are shown otherwise.
+        // TODO(EuString): for a message only; bytes that are not UTF-8 are shown lossily.
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
     })
 }
@@ -333,7 +333,7 @@ pub fn diff_tree(from: &str, to: &str) -> Result<Vec<Changed>, Error> {
 }
 
 /// The contents of the objects `ids`, in their order, read by one `git cat-file --batch`; `None`
-/// for an object that the repository lacks.
+/// for a name that names no object of the repository, or more than one.
 pub fn cat_file<S: AsRef<str>>(ids: &[S]) -> Result<Vec<Option<Vec<u8>>>, Error> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -347,7 +347,8 @@ pub fn cat_file<S: AsRef<str>>(ids: &[S]) -> Result<Vec<Option<Vec<u8>>>, Error>
         status: output.status,
         stderr: "its output could not be read".to_owned(),
     };
-    // Each object is `<id> <type> <size>\n<contents>\n`, or `<name> missing\n`.
+    // Each object is `<id> <type> <size>\n<contents>\n`, or `<name> missing\n` or
+    // `<name> ambiguous\n`.
     let mut rest = output.stdout.as_slice();
     let mut objects = Vec::with_capacity(ids.len());
     for _ in ids {
@@ -375,11 +376,11 @@ pub fn cat_file<S: AsRef<str>>(ids: &[S]) -> Result<Vec<Option<Vec<u8>>>, Error>
     Ok(objects)
 }
 
-/// A command as the shell would show it, for messages.
+/// The program and its arguments, joined by spaces and unquoted, for messages.
 pub fn describe(command: &Command) -> String {
     std::iter::once(command.get_program())
         .chain(command.get_args())
-        // TODO(EuString): for a message only, but bytes that are not UTF-8 are shown otherwise.
+        // TODO(EuString): for a message only; bytes that are not UTF-8 are shown lossily.
         .map(|arg| arg.to_string_lossy())
         .collect::<Vec<_>>()
         .join(" ")
