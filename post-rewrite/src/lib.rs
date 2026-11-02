@@ -1,5 +1,6 @@
 //! Records in refs/notes/replaces the commits that `git commit --amend` or a rebase made, through
-//! `record`: the note of each new commit comes to stand in place of the commit it was made from.
+//! `record`: the note of each new commit names the commit it was made from, in whose place the new
+//! commit stands.
 //!
 //! During a rebase, git reports each fixup or squash step, and each `git commit --amend` that an
 //! `exec` line or the operator at a stop of the rebase runs, as a single-commit rewrite, which git
@@ -367,8 +368,8 @@ impl Replacements {
         mut kept: impl FnMut(&str) -> Result<bool, Error>,
     ) -> Result<&'a str, Error> {
         let mut chain = vec![commit];
-        // The visited commits end a cycle, as a replacement that made a commit again
-        // forms.
+        // A replacement that made an earlier commit again forms a cycle; the walk ends at the
+        // first commit it visits twice.
         let mut visited = HashSet::from([commit]);
         let mut at = commit;
         while let Some(next) = self.last.get(at) {

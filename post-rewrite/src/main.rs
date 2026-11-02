@@ -3,10 +3,10 @@
 //!
 //! A rewrite that cannot be recorded is kept as an abandoned record, and printed as a command that
 //! records it by hand: git passes the rewrite to the hook once only. The hook then fails, which
-//! git ignores. A signal that ends the hook before the rewrite is recorded ends the git commands it
-//! runs, keeps the rewrite as an abandoned record in the same way, waiting at most a minute for it
-//! to be written, and then ends the hook as the signal would have. A signal that stops the hook,
-//! such as that of Ctrl-Z, stops it and its git commands as usual, and they carry on once
+//! git ignores. When a signal would end the hook before the rewrite is recorded, the hook ends the
+//! git commands it runs, keeps the rewrite as an abandoned record in the same way, waiting at most
+//! a minute for it to be written, and then ends as the signal would have. A signal that stops the
+//! hook, such as that of Ctrl-Z, stops it and its git commands as usual, and they carry on once
 //! continued.
 
 use std::fmt::Display;
@@ -38,7 +38,6 @@ const SIGNALS: [i32; 4] = [SIGINT, SIGTERM, SIGHUP, SIGQUIT];
 /// How long the hook waits for an abandoned record to be written once a signal ends it.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// How often the hook says what it waits for, once it has taken that long.
 const HEARTBEAT: Duration = replaces_index_record::heartbeat::EVERY;
 
 enum Event {

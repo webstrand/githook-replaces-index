@@ -61,7 +61,8 @@ fn a_rebase_follows_an_amend_during_it() {
 fn a_rebase_does_not_follow_an_amend_that_was_undone() {
     let repo = repo();
     let a = commit(repo.path(), "a");
-    // A new base, so that the rebase makes another commit of `a` within the same second.
+    // A new base, so that the rebase makes a commit of `a` with another id even within the same
+    // second: a forced rebase onto the same parent would make the same commit again.
     ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~"]);
     commit(repo.path(), "upstream");
     ok(repo.path(), &["switch", "-q", "-"]);
@@ -149,7 +150,8 @@ fn every_write_moves_the_ref_from_the_commit_it_read() {
 fn a_rebase_follows_two_amends_during_it() {
     let repo = repo();
     let a = commit(repo.path(), "a");
-    // A new base, so that the rebase makes another commit of `a` within the same second.
+    // A new base, so that the rebase makes a commit of `a` with another id even within the same
+    // second: a forced rebase onto the same parent would make the same commit again.
     ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~"]);
     commit(repo.path(), "upstream");
     ok(repo.path(), &["switch", "-q", "-"]);

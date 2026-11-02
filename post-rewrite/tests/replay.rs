@@ -66,8 +66,8 @@ fn records_are_recorded_oldest_first() {
     let x = commit(repo.path(), "x");
     let x2 = amend_of(repo.path(), &x);
     let x3 = amend_of(repo.path(), &x2);
-    // The newer record comes first in the directory's own order only by chance; its name sorts
-    // after the older one.
+    // The newer record is written first, so that only its name, which sorts after the older one's,
+    // puts the records in order.
     keep(
         repo.path(),
         "000000000002.000000000-0",

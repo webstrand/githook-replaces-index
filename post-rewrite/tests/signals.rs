@@ -106,8 +106,8 @@ fn a_signal_while_a_replacement_is_deferred_abandons_the_replacement() {
     ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~"]);
     commit(repo.path(), "upstream");
     ok(repo.path(), &["switch", "-q", "-"]);
-    // A stop for a break rather than an edit, whose replacement the hook would defer without
-    // asking.
+    // A stop for a break rather than an edit: at an edit, the hook defers a replacement of the
+    // commit stopped at without running rev-list, which this test holds.
     rebase_keeping(repo.path(), "upstream", "1s/$/\\nbreak/");
     let a1 = ok(repo.path(), &["rev-parse", "HEAD"]);
     let a2 = amend_of(repo.path(), &a1);

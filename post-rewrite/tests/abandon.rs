@@ -16,14 +16,14 @@ use common::{
     repo, stderr_of, with_git_env,
 };
 
-/// Asserts that the hook failed, kept `lines` as the only abandoned record, and printed them.
+/// Asserts that `lines` are the only abandoned record, and that the hook printed them as kept.
 fn assert_abandoned(repo: &Path, stderr: &str, lines: &[String]) {
     assert_eq!(abandoned(repo), lines, "{stderr}");
     assert!(stderr.contains(&printed(lines)), "{stderr}");
     assert!(stderr.contains("was kept in"), "{stderr}");
 }
 
-/// Asserts that the hook failed, could keep no record, and printed `lines`.
+/// Asserts that no abandoned record was kept, and that the hook printed `lines` as not kept.
 fn assert_printed_only(repo: &Path, stderr: &str, lines: &[String]) {
     assert!(abandoned(repo).is_empty(), "{stderr}");
     assert!(stderr.contains(&printed(lines)), "{stderr}");
@@ -50,7 +50,7 @@ fn a_held_lock_abandons_the_end_of_a_rebase() {
     let repo = repo();
     let a = commit(repo.path(), "a");
     let b = commit(repo.path(), "b");
-    // A new base, so that the rebase makes new commits of `a` and `b` within the same second.
+    // A new base, so that the rebase makes new commits of `a` and `b` rather than keeping them.
     ok(repo.path(), &["switch", "-q", "-c", "upstream", "HEAD~2"]);
     commit(repo.path(), "upstream");
     ok(repo.path(), &["switch", "-q", "-"]);
