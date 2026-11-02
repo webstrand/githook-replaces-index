@@ -1,5 +1,5 @@
-//! Pulls a remote's replaces notes: fetches its refs/notes/replaces into
-//! refs/notes/remotes/<remote>/replaces, and merges that into the local ref as `record` writes it,
+//! Pulls a remote's replaces notes: fetches its refs/notes/replaces into the ref that the remote's
+//! fetch refspecs give, and merges that into the local ref as `record` writes it,
 //! taking the union of each note's lines and moving the ref only from the commit it read. Lines are
 //! only ever added to the notes, so the union is the whole merge. The remote is not changed; it
 //! pulls from this clone in turn.
@@ -8,6 +8,7 @@ mod error;
 
 use std::process::Command;
 
+use replaces_index_record::REF;
 use runner::git;
 
 pub use crate::error::Error;
@@ -22,9 +23,9 @@ pub enum Pulled {
 }
 
 /// Pulls the replaces notes of `remote`, fetching them alone. `remote` is the name of a configured
-/// remote, whose notes are kept in refs/notes/remotes/<remote>/replaces, or, as `git pull` takes,
-/// a URL or path, whose notes are fetched into a ref of their own only until they are merged, as
-/// `git pull` keeps nothing of such a remote but FETCH_HEAD.
+/// remote, whose fetch refspecs must bring its notes into a ref beside the local ones, or, as
+/// `git pull` takes, a URL or path, whose notes are fetched into a ref of their own only until they
+/// are merged, as `git pull` keeps nothing of such a remote but FETCH_HEAD.
 pub fn pull(remote: &str) -> Result<Pulled, Error> {
     let fetch_error = |source| Error::Fetch {
         remote: remote.to_owned(),
@@ -32,7 +33,7 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
     };
     let remotes = runner::stdout(&mut git(["remote"])).map_err(fetch_error)?;
     if remotes.lines().any(|name| name == remote) {
-        let kept = kept(remote);
+        let kept = kept(remote)?;
         let refspec = refspec(&kept);
         return fetch_and_merge(
             remote,
@@ -60,23 +61,25 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
     pulled
 }
 
-/// Fetches `remote` as `git fetch <remote>` does, and pulls its replaces notes, which the same
-/// fetch brings. `remote` must be the name of a configured remote.
+/// Fetches `remote` as `git fetch <remote>` does, and pulls its replaces notes, which its fetch
+/// refspecs must bring into a ref beside the local ones. `remote` must be the name of a configured
+/// remote.
 pub fn fetch_and_pull(remote: &str) -> Result<Pulled, Error> {
-    let kept = kept(remote);
-    // Added to the refspecs that the remote's configuration gives, which a refspec named on the
-    // command line would replace.
-    let config = format!("remote.{remote}.fetch={}", refspec(&kept));
-    fetch_and_merge(
-        remote,
-        &kept,
-        git(["-c", &config, "fetch", "--porcelain", "-v", remote]),
-    )
+    let kept = kept(remote)?;
+    fetch_and_merge(remote, &kept, git(["fetch", "--porcelain", "-v", remote]))
 }
 
-/// The ref that keeps the notes of the configured remote `remote`.
-fn kept(remote: &str) -> String {
-    format!("refs/notes/remotes/{remote}/replaces")
+/// The ref that the fetch refspecs of the configured remote `remote` bring its notes into. A
+/// refspec that brings them into the local notes ref itself does not keep them beside it.
+fn kept(remote: &str) -> Result<String, Error> {
+    let kept = runner::refspec::destination(remote, REF).map_err(|source| Error::Fetch {
+        remote: remote.to_owned(),
+        source,
+    })?;
+    kept.filter(|kept| kept != REF)
+        .ok_or_else(|| Error::Unconfigured {
+            remote: remote.to_owned(),
+        })
 }
 
 /// The refspec that fetches the remote's notes into `theirs`. It is a glob, so that a remote

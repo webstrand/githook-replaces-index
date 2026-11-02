@@ -49,6 +49,13 @@ impl Refspec {
         Some(self.src.replacen('*', star, 1))
     }
 
+    /// The ref that this refspec fetches the ref `src` of the remote into, if it fetches it.
+    pub fn destination_of(&self, src: &str) -> Option<String> {
+        let dst = self.dst.as_deref()?;
+        let star = matched(&self.src, src)?;
+        Some(dst.replacen('*', star, 1))
+    }
+
     /// Whether this is a negative refspec that excludes the ref `src` of the remote.
     pub fn excludes(&self, src: &str) -> bool {
         self.negative && matched(&self.src, src).is_some()
@@ -94,6 +101,17 @@ pub fn remote_of(full: &str) -> Result<Option<String>, Error> {
         .map(|refspec| refspec.remote))
 }
 
+/// The ref that a fetch of `remote` brings its ref `src` into, through the first of its refspecs
+/// that maps it, unless a negative refspec of the remote excludes it.
+pub fn destination(remote: &str, src: &str) -> Result<Option<String>, Error> {
+    let refspecs = fetch_refspecs()?;
+    let of_remote = || refspecs.iter().filter(|refspec| refspec.remote == remote);
+    if of_remote().any(|refspec| refspec.excludes(src)) {
+        return Ok(None);
+    }
+    Ok(of_remote().find_map(|refspec| refspec.destination_of(src)))
+}
+
 /// The refspecs whose fetch moves the ref `full` whether or not it fast-forwards, and so may drop
 /// what the ref held: those with a `+` that map a ref of their remote to `full`, unless a negative
 /// refspec of the same remote excludes that ref.
@@ -126,6 +144,16 @@ mod tests {
             Some("refs/notes/replaces")
         );
         assert_eq!(refspec.source_of("refs/heads/main"), None);
+    }
+
+    #[test]
+    fn a_glob_brings_a_ref_into_its_destination() {
+        let refspec = Refspec::parse("o", "+refs/notes/replaces*:refs/notes/remotes/o/replaces*");
+        assert_eq!(
+            refspec.destination_of("refs/notes/replaces").as_deref(),
+            Some("refs/notes/remotes/o/replaces")
+        );
+        assert_eq!(refspec.destination_of("refs/notes/commits"), None);
     }
 
     #[test]

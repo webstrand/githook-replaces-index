@@ -1,0 +1,5 @@
+---
+source: pull/tests/pull.rs
+expression: stderr
+---
+pull-replaces: origin has no fetch refspec that brings its refs/notes/replaces beside this clone's; to add one: git config --add 'remote.origin.fetch' '+refs/notes/replaces*:refs/notes/remotes/origin/replaces*'

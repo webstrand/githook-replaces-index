@@ -123,7 +123,7 @@ A note that a step moved to another fanout, as a writer moves every note once th
 
 Each rewrite leaves the notes of the commits it replaced, which garbage collection removes once nothing reaches them, and each note copies the lines it inherits, so that the notes of a branch rebased many times grow with every rebase. `git gc-replaces`, which the operator runs, removes the notes of the commits that the clone no longer has, in one commit on the ref, written as `record` writes. The lines of each go first to the notes of the commits the clone has that name it, directly or through other notes removed, so that nothing it recorded is lost and the repair takes the removal for one that loses nothing. A note that no such note names is the only record of what it holds, and stays. The index is built anew at the next query, without the notes removed.
 
-A fetch refspec with a `+` that maps a ref of a remote to `refs/notes/replaces`, as `+refs/notes/*:refs/notes/*` set to share other notes does, replaces the local notes with the remote's on each fetch, and drops every line that the clone recorded since it last pulled. While such a refspec exists, every command refuses to run, and names it on standard error with the command that maps its destinations under `refs/notes/remotes/<remote>/` instead, where the remote's notes are kept beside the local ones; for `+refs/notes/*:refs/notes/*`, `git config --replace-all --fixed-value 'remote.<remote>.fetch' '+refs/notes/*:refs/notes/remotes/<remote>/*' '+refs/notes/*:refs/notes/*'`. The hook, which runs once the rewrite is made, records it all the same and names the refspec. `install.sh` names it as well. Nothing is changed unasked. A negative refspec such as `^refs/notes/replaces` does not serve: git applies it to the remote's ref, which the refspec that fetches the notes beside the local ones fetches as well. `git pull-replaces` fetches into a ref of its own, and needs no refspec.
+A fetch refspec with a `+` that maps a ref of a remote to `refs/notes/replaces`, as `+refs/notes/*:refs/notes/*` set to share other notes does, replaces the local notes with the remote's on each fetch, and drops every line that the clone recorded since it last pulled. While such a refspec exists, every command refuses to run, and names it on standard error with the command that maps its destinations under `refs/notes/remotes/<remote>/` instead, where the remote's notes are kept beside the local ones; for `+refs/notes/*:refs/notes/*`, `git config --replace-all --fixed-value 'remote.<remote>.fetch' '+refs/notes/*:refs/notes/remotes/<remote>/*' '+refs/notes/*:refs/notes/*'`. The hook, which runs once the rewrite is made, records it all the same and names the refspec. `install.sh` names it as well. Nothing is changed unasked. A negative refspec such as `^refs/notes/replaces` does not serve: git applies it to the remote's ref, which the refspec that fetches the notes beside the local ones fetches as well.
 
 ## Index
 
@@ -162,14 +162,14 @@ Each line ends with the commit's subject. Nothing of `old` is lost in `new` when
 
 Each clone records the rewrites made in it. `git pull-replaces <remote>` merges a remote's notes into the local ones:
 
-1. It fetches the remote's `refs/notes/replaces` into `refs/notes/remotes/<remote>/replaces`, through one `git fetch`, whose output also tells whether the remote has any. The fetch names its refspec itself, so the remote needs no configuration.
+1. It fetches the remote's `refs/notes/replaces`, alone, into the ref that the remote's fetch refspecs bring it into, through one `git fetch`, whose output also tells whether the remote has any. A remote whose refspecs bring the notes into no ref, or into `refs/notes/replaces` itself, is refused, with the command that configures the refspec below.
 2. It merges that into the local `refs/notes/replaces` as `record` writes it: the merge takes the union of each note's lines, which never conflicts, keeps the remote's notes commit as a parent, and moves the ref only from the commit it read, retrying as `record` does. A note that the local ref lacks is written at the fanout of the local notes, rather than at its path in the remote's, whose fanout may differ. When either notes commit holds the other, the ref is left as it is, or moved to the remote's.
 
 `<remote>` may also be a URL or a path, as `git pull` takes: the notes are then fetched into a ref of their own, which is deleted once they are merged, so that nothing of such a remote is kept, as `git pull` keeps nothing of it but `FETCH_HEAD`.
 
 Lines are only ever added to notes, so the union is the whole merge. The remote is not changed. Two clones that each record rewrites hold the same notes once each has pulled from the other, after the last rewrite in either; a host that cannot reach the operator's clone receives no notes from it. A clone may pull from several remotes in turn.
 
-Nothing merges a remote's notes until a pull runs: the installer cannot know which remotes share them, and says so when it finishes. The replaces notes of a remote may also be fetched by every `git fetch`, for reading between pulls, by adding a refspec to the remote's configuration:
+Nothing merges a remote's notes until a pull runs: the installer cannot know which remotes share them, and says so when it finishes. The operator must configure, for each remote whose notes the clone shares, a refspec that brings them beside the local ones, so that every `git fetch` brings them as well:
 
 ```
 git config --add remote.<remote>.fetch '+refs/notes/replaces*:refs/notes/remotes/<remote>/replaces*'
@@ -183,7 +183,7 @@ The refspec is a glob so that a remote without replaces notes matches nothing: a
 
 `git rebase-replaces [<upstream>]` rebases the current branch onto `<upstream>`, by default its configured upstream, and leaves out every commit of the branch that the upstream already holds in another form:
 
-1. When `<upstream>` is a remote-tracking branch, it fetches the remote, and its replaces notes in the same fetch, and merges them as `git pull-replaces` does.
+1. When `<upstream>` is a remote-tracking branch, it fetches the remote as `git fetch <remote>` does, which brings its replaces notes through the refspec of [Remotes](#remotes), and merges them as `git pull-replaces` does. A remote without that refspec is refused, as `git pull-replaces` refuses it.
 2. Of the commits of the branch that the upstream lacks, it leaves out each one for which `git compare-replaces HEAD <upstream>` prints a `held` line, and, when no `<upstream>` is named, each one that the configured upstream's reflog shows it once held, as `git rebase` uses its fork point only when it is named no upstream either: a named upstream is taken as it is.
 3. It names each commit it leaves out, and why: the upstream commits made from it, or the upstream's reflog.
 4. It replays the others onto the upstream through `git rebase -i`, with the commits left out marked `drop` in the list.

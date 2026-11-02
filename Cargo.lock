@@ -264,6 +264,7 @@ name = "replaces-index-pull"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "insta",
  "replaces-index-record",
  "replaces-index-runner",
  "tempfile",

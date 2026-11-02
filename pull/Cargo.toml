@@ -17,4 +17,5 @@ runner = { package = "replaces-index-runner", path = "../runner" }
 replaces-index-record = { path = "../record" }
 
 [dev-dependencies]
+insta = "1"
 tempfile = "3"

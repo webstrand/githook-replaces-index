@@ -93,6 +93,14 @@ fn note_add(repo: &Path, commit: &str, text: &str) {
     git(repo, &["update-ref", REF, new.trim()]);
 }
 
+/// Adds `theirs` as the remote `origin` of `ours`, with the refspec that fetches its notes beside
+/// the local ones.
+fn add_origin(ours: &Path, theirs: &Path) {
+    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    let refspec = "+refs/notes/replaces*:refs/notes/remotes/origin/replaces*";
+    git(ours, &["config", "--add", "remote.origin.fetch", refspec]);
+}
+
 fn note(repo: &Path, commit: &str) -> String {
     git(repo, &["cat-file", "-p", &format!("{REF}:{commit}")])
 }
@@ -103,7 +111,7 @@ fn merges_the_notes_of_a_remote() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (a, b, c, x) = (id('a'), id('b'), id('c'), id('e'));
     // `b` was made from `a` in their clone, and from `x` as well in ours, which then made `c` of
     // `b` before it pulled.
@@ -134,7 +142,7 @@ fn takes_the_notes_of_a_remote_when_it_has_none() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (a, b) = (id('a'), id('b'));
     note_add(theirs, &b, &format!("replaces: {a}\n"));
 
@@ -149,10 +157,26 @@ fn says_so_when_a_remote_has_no_notes() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (ok, _, stderr) = run(ours, PULL, &["origin"]);
     assert!(ok, "{stderr}");
     assert_eq!(stderr, format!("pull-replaces: origin has no {REF}\n"));
+}
+
+#[test]
+fn refuses_a_remote_whose_refspecs_bring_no_notes() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    note_add(theirs, &id('b'), &format!("replaces: {}\n", id('a')));
+
+    let (ok, _, stderr) = run(ours, PULL, &["origin"]);
+    assert!(!ok);
+    insta::assert_snapshot!(stderr);
+    let (fetched, _, _) = run(ours, "git", &["rev-parse", "--verify", "-q", REF]);
+    assert!(!fetched);
 }
 
 #[test]
@@ -197,7 +221,7 @@ fn merges_from_the_commit_it_read() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (a, b, x) = (id('a'), id('b'), id('e'));
     note_add(theirs, &b, &format!("replaces: {a}\n"));
     note_add(ours, &b, &format!("replaces: {x}\n"));
@@ -224,7 +248,7 @@ fn fast_forwards_from_the_commit_it_read() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (a, b, c) = (id('a'), id('b'), id('c'));
     note_add(theirs, &b, &format!("replaces: {a}\n"));
     let (ok, _, stderr) = run(ours, PULL, &["origin"]);
@@ -247,7 +271,7 @@ fn says_what_it_waits_for() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (a, b, x) = (id('a'), id('b'), id('e'));
     note_add(theirs, &b, &format!("replaces: {a}\n"));
     note_add(ours, &b, &format!("replaces: {x}\n"));
@@ -278,7 +302,7 @@ fn writes_a_note_it_lacked_at_the_fanout_of_its_own_notes() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (a, b, c, d) = (id('a'), id('b'), id('c'), id('d'));
     note_add(theirs, &d, &format!("replaces: {c}\n"));
     note_add(ours, &nested(&b), &format!("replaces: {a}\n"));
@@ -297,7 +321,7 @@ fn merges_from_a_subdirectory_as_from_the_top() {
     let (theirs, ours) = (theirs.path(), ours.path());
     git(theirs, &["init", "-q"]);
     git(ours, &["init", "-q"]);
-    git(ours, &["remote", "add", "origin", theirs.to_str().unwrap()]);
+    add_origin(ours, theirs);
     let (a, b, x) = (id('a'), id('b'), id('e'));
     note_add(theirs, &b, &format!("replaces: {a}\n"));
     note_add(ours, &b, &format!("replaces: {x}\n"));

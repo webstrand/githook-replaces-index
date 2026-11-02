@@ -71,6 +71,9 @@ fn subjects(repo: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The refspec that fetches the notes of `origin` beside the local ones.
+const NOTES: &str = "+refs/notes/replaces*:refs/notes/remotes/origin/replaces*";
+
 /// An upstream with `a` and `b`, a clone with `x` on top of them, and the upstream with `a` and
 /// `b` rewritten as `a'` and `b'` afterwards. The clone fetched `b` after it was made, so that
 /// the reflog of its remote-tracking branch, which a clone does not start, shows `b`.
@@ -82,6 +85,10 @@ fn rewritten() -> (tempfile::TempDir, tempfile::TempDir, [String; 4]) {
     commit(up, "base", "base");
     let a = commit(up, "a", "a");
     git(clone.path(), &["clone", "-q", up.to_str().unwrap(), "."]);
+    git(
+        clone.path(),
+        &["config", "--add", "remote.origin.fetch", NOTES],
+    );
     let b = commit(up, "b", "b");
     git(clone.path(), &["pull", "-q", "--ff-only"]);
     commit(clone.path(), "x", "x");
@@ -114,6 +121,23 @@ fn leaves_out_the_commits_the_upstream_rewrote() {
         )
     );
     assert_eq!(subjects(clone.path()), ["base", "a'", "b'", "x"]);
+}
+
+#[test]
+fn refuses_a_remote_whose_refspecs_bring_no_notes() {
+    let (_upstream, clone, _) = rewritten();
+    let fetch = "remote.origin.fetch";
+    git(
+        clone.path(),
+        &["config", "--unset", "--fixed-value", fetch, NOTES],
+    );
+    let (ok, _, stderr) = run(clone.path(), REBASE, &[]);
+    assert!(!ok);
+    assert!(
+        stderr.contains("origin has no fetch refspec that brings its refs/notes/replaces"),
+        "{stderr}"
+    );
+    assert_eq!(subjects(clone.path()), ["base", "a", "b", "x"]);
 }
 
 #[test]
@@ -275,8 +299,11 @@ fn fetches_the_remote_whose_refspec_makes_the_upstream() {
         clone,
         &[
             "config",
+            "--replace-all",
+            "--fixed-value",
             "remote.origin.fetch",
             "+refs/heads/*:refs/remotes/mirror/*",
+            "+refs/heads/*:refs/remotes/origin/*",
         ],
     );
     git(clone, &["fetch", "-q", "origin"]);

@@ -6,6 +6,11 @@ pub enum Error {
         remote: String,
         source: runner::Error,
     },
+    #[error(
+        "{remote} has no fetch refspec that brings its {} beside this clone's; to add one: git config --add 'remote.{remote}.fetch' '+refs/notes/replaces*:refs/notes/remotes/{remote}/replaces*'",
+        replaces_index_record::REF
+    )]
+    Unconfigured { remote: String },
     #[error("could not merge the notes of {remote}: {source}")]
     Merge {
         remote: String,
