@@ -183,3 +183,38 @@ fn says_how_to_rebuild_a_damaged_index() {
     std::fs::remove_file(&index).unwrap();
     assert_eq!(whereis(repo, &a), format!("self {a} main\n"));
 }
+
+#[test]
+fn queries_while_the_index_is_deleted_still_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    let a = commit(repo, "a");
+    let a2 = commit(repo, "a'");
+    let note = format!("replaces: {a}");
+    git(repo, &["notes", "--ref=replaces", "add", "-m", &note, &a2]);
+    let expected = whereis(repo, &a);
+    let index = repo.join(".git/replaces/index.redb");
+
+    // Deleting the file unlinks it: a query that has it open goes on with the old file, and the
+    // next one builds a new file.
+    let queries = std::sync::atomic::AtomicUsize::new(8);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while queries.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                let _ = std::fs::remove_file(&index);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        for _ in 0..8 {
+            scope.spawn(|| {
+                let answers: Vec<_> = (0..10).map(|_| run(repo, WHEREIS, &[&a])).collect();
+                queries.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                for (ok, stdout, stderr) in answers {
+                    assert!(ok, "{stderr}");
+                    assert_eq!(stdout, expected);
+                }
+            });
+        }
+    });
+}

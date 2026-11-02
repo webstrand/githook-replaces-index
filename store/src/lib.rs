@@ -66,7 +66,14 @@ impl Index {
             match open_current(&path, notes.as_deref())? {
                 Opened::Current(db) => return Ok(Self { db, path }),
                 Opened::Locked => {}
-                Opened::Stale => match Database::create(&path) {
+                Opened::Stale if !path.exists() => {
+                    build(&path, notes.as_deref())?;
+                    deadline = Instant::now() + PATIENCE;
+                    continue;
+                }
+                // Opened rather than created, so that a file deleted in the meantime is not
+                // created empty, as a process that opens it then would take for damaged.
+                Opened::Stale => match Database::open(&path) {
                     Ok(db) => {
                         update(&db, &path, notes.as_deref())?;
                         // Reopened read-only at once, so that other processes may share it. The
@@ -76,6 +83,7 @@ impl Index {
                         continue;
                     }
                     Err(DatabaseError::DatabaseAlreadyOpen) => {}
+                    Err(_) if !path.exists() => continue,
                     Err(source) => return Err(index_error(&path, source)),
                 },
             }
@@ -169,6 +177,26 @@ fn index_error(path: &std::path::Path, source: impl Into<redb::Error>) -> Error 
     }
 }
 
+/// Builds the index at `path` from the notes commit `notes`, under a name of its own first, and
+/// renames it into place once built: a database that redb creates is an empty file for a moment,
+/// which another process that opened it then would take for damaged.
+fn build(path: &std::path::Path, notes: Option<&str>) -> Result<(), Error> {
+    let building = path.with_file_name(format!(".index.redb.{}", std::process::id()));
+    let built = Database::create(&building)
+        .map_err(|source| index_error(&building, source))
+        .and_then(|db| update(&db, &building, notes))
+        .and_then(|()| {
+            fs::rename(&building, path).map_err(|source| Error::Replace {
+                path: path.to_owned(),
+                source,
+            })
+        });
+    if built.is_err() {
+        let _ = fs::remove_file(&building);
+    }
+    built
+}
+
 /// The outcome of an attempt to open the index read-only.
 enum Opened {
     /// The index is up to date with the notes commit.
@@ -188,6 +216,8 @@ fn open_current(path: &std::path::Path, notes: Option<&str>) -> Result<Opened, E
         Err(DatabaseError::DatabaseAlreadyOpen) => return Ok(Opened::Locked),
         // A writer repairs a database that was not closed cleanly.
         Err(DatabaseError::RepairAborted) => return Ok(Opened::Stale),
+        // Deleted since it was found, which the operator may do at any time.
+        Err(_) if !path.exists() => return Ok(Opened::Stale),
         Err(source) => return Err(index_error(path, source)),
     };
     let indexed = indexed_notes(&db).map_err(|e| index_error(path, e))?;

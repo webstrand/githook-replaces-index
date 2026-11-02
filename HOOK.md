@@ -117,7 +117,7 @@ The queries read an index of the notes, kept in `replaces/index.redb` in the com
 
 The index records the notes commit it was built from. Each query opens it, and when the notes ref has moved, whatever moved it, brings it up to date first. Since lines are only ever added to the notes, it reads only the notes that `git diff-tree` reports added or changed since the commit indexed. A notes ref that lost a note, or that does not descend from the commit indexed, is indexed anew. An index built from a notes commit that descends from the one a query read, as when another process moved the ref and brought the index up to date in the meantime, holds every line of it, and is used as it is.
 
-Queries open the database read-only, which any number of processes may do at once. Bringing it up to date needs it alone, and waits up to ten seconds while other processes hold it.
+Queries open the database read-only, which any number of processes may do at once. Bringing it up to date needs it alone, and waits up to ten seconds while other processes hold it. A query that finds no index builds one under a name of its own, `.index.redb.<pid>`, and renames it into place, so that another never opens one half made; a query that has the file open when it is deleted goes on with it.
 
 ## Queries
 
