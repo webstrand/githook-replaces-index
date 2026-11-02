@@ -25,6 +25,7 @@
 //! leads to it either.
 
 mod error;
+mod notice;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -37,6 +38,7 @@ use replaces_index_record::Rewrite;
 use replaces_index_record::abandoned::{self, Waiting};
 
 pub use crate::error::Error;
+use crate::notice::{Abandoned, Fallback, tell};
 
 /// The command that rewrote the commits, as git passes it to the hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -78,9 +80,7 @@ pub fn post_rewrite(
         rewrite,
     })?;
     if let Err(err) = waiting.remove() {
-        tell(format_args!(
-            "{err}; they are recorded again by the next rewrite"
-        ));
+        tell(&Abandoned::Unremoved(err));
     }
     replaces_index_record::check_refspecs("replaces-index");
     Ok(())
@@ -90,19 +90,17 @@ pub fn post_rewrite(
 /// which is said.
 fn waiting() -> Waiting {
     let read = abandoned::dir()
-        .map_err(|err| err.to_string())
-        .and_then(|dir| abandoned::waiting(&dir).map_err(|err| err.to_string()));
+        .map_err(replaces_index_record::Error::Read)
+        .and_then(|dir| abandoned::waiting(&dir));
     match read {
         Ok(waiting) => {
             for dropped in &waiting.dropped {
-                tell(runner::chain(dropped));
+                tell(dropped);
             }
             waiting
         }
         Err(err) => {
-            tell(format_args!(
-                "{err}; the abandoned records wait for a later rewrite"
-            ));
+            tell(&Abandoned::Unread(err));
             Waiting::default()
         }
     }
@@ -138,7 +136,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
         Ok(Some(state)) => state,
         Ok(None) => return rewrite,
         Err(err) => {
-            warn(err, "the rewrite is recorded as git reported it");
+            tell(&Fallback::AsReported(err));
             return rewrite;
         }
     };
@@ -146,10 +144,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
         Kind::Single => {
             let mut deferred = Vec::new();
             let edited = edited(&state).unwrap_or_else(|err| {
-                warn(
-                    err,
-                    "a replacement of the commit stopped at for an edit is recorded at once",
-                );
+                tell(&Fallback::EditedAtOnce(err));
                 String::new()
             });
             // The commits that replacements recorded at once made: nothing that the rebase reports
@@ -158,7 +153,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
             let made_at_once: HashSet<String> = match Replacements::read(&state.join(AT_ONCE)) {
                 Ok(at_once) => at_once.made.into_iter().map(|(_, new)| new).collect(),
                 Err(err) => {
-                    warn(err, "a replacement of a commit it names is deferred");
+                    tell(&Fallback::NamedDeferred(err));
                     HashSet::new()
                 }
             };
@@ -174,7 +169,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
                     Ok(true) => rewrite.replacements.push(replacement),
                     Ok(false) => deferred.push(replacement),
                     Err(err) => {
-                        warn(err, "the replacement is recorded at once");
+                        tell(&Fallback::AtOnce(err));
                         rewrite.replacements.push(replacement);
                     }
                 }
@@ -183,11 +178,11 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Err(err) = append(&state.join(DEFERRED), &deferred) {
-                warn(err, "the replacement is recorded at once");
+                tell(&Fallback::AtOnce(err));
                 rewrite.replacements.extend(deferred);
             }
             if let Err(err) = append(&state.join(AT_ONCE), &rewrite.replacements) {
-                warn(err, "a later replacement of the commit it made is deferred");
+                tell(&Fallback::LaterDeferred(err));
             }
             *held = Some(rewrite.clone());
         }
@@ -195,7 +190,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
             let deferred = match Replacements::read(&state.join(DEFERRED)) {
                 Ok(deferred) => deferred,
                 Err(err) => {
-                    warn(err, "the deferred replacements are not recorded");
+                    tell(&Fallback::DeferredLost(err));
                     return rewrite;
                 }
             };
@@ -210,7 +205,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
             match deferred.follow(&rewrite, on_branch) {
                 Ok(followed) => rewrite = followed,
                 Err(err) => {
-                    warn(err, "every deferred replacement is recorded as it was made");
+                    tell(&Fallback::AsMade(err));
                     rewrite.replacements.extend(deferred.made);
                 }
             }
@@ -218,15 +213,6 @@ fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>
         Kind::FilterRepo => unreachable!("a filter-repo rewrite returns before the match"),
     }
     rewrite
-}
-
-/// Says why the rewrite is recorded in a cruder form than the hook would record.
-fn warn(err: Error, consequence: &str) {
-    tell(format_args!("{err}; {consequence}"));
-}
-
-fn tell(message: impl std::fmt::Display) {
-    let _ = writeln!(io::stderr(), "replaces-index: {message}");
 }
 
 /// The file of the rebase's state directory in which the hook keeps the deferred replacements.

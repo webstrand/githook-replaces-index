@@ -9,7 +9,6 @@
 //! hook, such as that of Ctrl-Z, stops it and its git commands as usual, and they carry on once
 //! continued.
 
-use std::fmt::Display;
 use std::io::{self, Read, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -46,21 +45,51 @@ enum Event {
     /// Recording panicked, which the panic hook has said; what remains is in `outstanding`.
     Panicked,
     /// The abandoned record was written, or could not be; nothing when there was none to write.
-    Kept(Option<Result<PathBuf, String>>),
+    Kept(Option<Result<PathBuf, Unkept>>),
+}
+
+/// Why an abandoned record could not be kept.
+#[derive(Debug, thiserror::Error)]
+enum Unkept {
+    #[error("could not find the directory of abandoned records")]
+    Dir(#[source] Arc<runner::Error>),
+    #[error("could not write it")]
+    Write(#[source] io::Error),
+    #[error("a second signal ended the wait")]
+    SecondSignal,
+    #[error("it was not written within 60s")]
+    TimedOut,
+}
+
+/// What the hook says besides its failures.
+#[derive(Debug, thiserror::Error)]
+enum Notice {
+    #[error("could not handle signals")]
+    NoSignals(#[source] io::Error),
+    #[error(
+        "unable to note replaces, abandoning state, waiting for disk (60s timeout; signal again to skip)"
+    )]
+    Waiting,
+    #[error("the rewrite was kept in {}; to record it by hand:", .0.display())]
+    Kept(PathBuf),
+    #[error("the rewrite could not be kept")]
+    NotKept(#[source] Unkept),
+    #[error("to record it by hand:")]
+    ByHand,
+    #[error("the next rewrite records every abandoned record, as does {0}")]
+    RecordAll(String),
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut input = Vec::new();
     if let Err(err) = io::stdin().read_to_end(&mut input) {
-        say(Error::Input(err));
+        say(&Error::Input(err));
         return ExitCode::FAILURE;
     }
     let (rewrite, left_out) = Rewrite::parse_bytes(&input);
     for line in left_out {
-        say(format_args!(
-            "`{line}` of the rewrite is not UTF-8, and so no replacement; it is left out"
-        ));
+        say(&replaces_index_record::notice::Notice::NotUtf8(line));
     }
     let input = rewrite.text();
     let (events, received) = mpsc::channel();
@@ -75,10 +104,10 @@ fn main() -> ExitCode {
                 }
             });
         }
-        Err(err) => say(format_args!("could not handle signals: {err}")),
+        Err(err) => say(&Notice::NoSignals(err)),
     }
     // Found at once, since once a signal arrives no git command starts.
-    let dir = abandoned::dir().map_err(|err| err.to_string());
+    let dir = abandoned::dir().map_err(Arc::new);
     // Held from the start, so that a signal before the recording holds it keeps it all the same.
     let held = (!rewrite.replacements.is_empty()).then(|| rewrite.clone());
     let outstanding = Arc::new(Mutex::new(held));
@@ -92,8 +121,8 @@ fn main() -> ExitCode {
         received,
         patience: PATIENCE,
         keep: Arc::new(move |rewrite| {
-            let dir = dir.clone()?;
-            abandoned::keep(&dir, rewrite).map_err(|err| err.to_string())
+            let dir = dir.clone().map_err(Unkept::Dir)?;
+            abandoned::keep(&dir, rewrite).map_err(Unkept::Write)
         }),
     };
     let start = Instant::now();
@@ -105,7 +134,11 @@ fn main() -> ExitCode {
         {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
-                say(heartbeat(start.elapsed()));
+                let _ = writeln!(
+                    io::stderr(),
+                    "replaces-index: {}",
+                    heartbeat(start.elapsed())
+                );
                 beat += HEARTBEAT;
                 continue;
             }
@@ -114,7 +147,7 @@ fn main() -> ExitCode {
         match event {
             Event::Done(Ok(())) => return ExitCode::SUCCESS,
             Event::Done(Err(Failure { error, rewrite })) => {
-                say(runner::chain(&error));
+                say(&error);
                 return match hook.abandon(Some(rewrite), None) {
                     (Some(signal), _) => die(signal),
                     (None, _) => ExitCode::FAILURE,
@@ -169,7 +202,7 @@ struct Hook {
 }
 
 /// Writes an abandoned record, and returns its path.
-type Keep = dyn Fn(&Rewrite) -> Result<PathBuf, String> + Send + Sync;
+type Keep = dyn Fn(&Rewrite) -> Result<PathBuf, Unkept> + Send + Sync;
 
 /// How the hook was done with an abandoned rewrite.
 #[derive(Debug, PartialEq, Eq)]
@@ -196,9 +229,7 @@ impl Hook {
         }
         let waiting = || {
             if rewrite.is_some() {
-                say(
-                    "unable to note replaces, abandoning state, waiting for disk (60s timeout; signal again to skip)",
-                );
+                say(&Notice::Waiting);
             }
         };
         let mut deadline = signal.map(|_| Instant::now() + self.patience);
@@ -218,12 +249,11 @@ impl Hook {
             match event {
                 Ok(Event::Kept(None)) => return (signal, Ending::Kept),
                 Ok(Event::Kept(Some(Ok(path)))) => {
-                    let place = format!("was kept in {}", path.display());
-                    print_command(&place, rewrite.as_ref());
+                    print_command(Notice::Kept(path), rewrite.as_ref());
                     return (signal, Ending::Kept);
                 }
                 Ok(Event::Kept(Some(Err(err)))) => {
-                    print_command(&format!("could not be kept ({err})"), rewrite.as_ref());
+                    print_command(Notice::NotKept(err), rewrite.as_ref());
                     return (signal, Ending::NotKept);
                 }
                 Ok(Event::Signal(again)) if signal.is_none() => {
@@ -233,14 +263,12 @@ impl Hook {
                     waiting();
                 }
                 Ok(Event::Signal(_)) => {
-                    let reason = "could not be kept (a second signal ended the wait)";
-                    print_command(reason, rewrite.as_ref());
+                    print_command(Notice::NotKept(Unkept::SecondSignal), rewrite.as_ref());
                     return (signal, Ending::GaveUp);
                 }
                 Ok(Event::Done(_) | Event::Panicked) => {}
                 Err(_) => {
-                    let reason = "could not be kept (it was not written within 60s)";
-                    print_command(reason, rewrite.as_ref());
+                    print_command(Notice::NotKept(Unkept::TimedOut), rewrite.as_ref());
                     return (signal, Ending::GaveUp);
                 }
             }
@@ -254,18 +282,19 @@ fn heartbeat(elapsed: Duration) -> String {
 }
 
 /// Prints what became of `rewrite`, and the command that records it by hand.
-fn print_command(what: &str, rewrite: Option<&Rewrite>) {
+fn print_command(what: Notice, rewrite: Option<&Rewrite>) {
     let Some(rewrite) = rewrite else {
         return;
     };
-    say(format_args!("the rewrite {what}; to record it by hand:"));
+    let kept = matches!(what, Notice::Kept(_));
+    say(&what);
+    if !kept {
+        say(&Notice::ByHand);
+    }
     // A standard error that cannot be written to, for instance once the terminal is gone, leaves
     // the record kept all the same.
     let _ = writeln!(io::stderr(), "{}", abandoned::command(rewrite));
-    say(format_args!(
-        "the next rewrite records every abandoned record, as does {}",
-        abandoned::command_all()
-    ));
+    say(&Notice::RecordAll(abandoned::command_all()));
 }
 
 /// Ends the process as `signal` would have.
@@ -275,15 +304,15 @@ fn die(signal: i32) -> ! {
     process::exit(128 + signal);
 }
 
-fn say(message: impl Display) {
-    let _ = writeln!(io::stderr(), "replaces-index: {message}");
+fn say(notice: &dyn std::error::Error) {
+    replaces_index_record::notice::say("replaces-index", notice);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn hook(keep: impl Fn(&Rewrite) -> Result<PathBuf, String> + Send + Sync + 'static) -> Hook {
+    fn hook(keep: impl Fn(&Rewrite) -> Result<PathBuf, Unkept> + Send + Sync + 'static) -> Hook {
         let (events, received) = mpsc::channel();
         Hook {
             events,
@@ -298,7 +327,7 @@ mod tests {
     }
 
     /// A record that is never written, as on a disk that does not answer.
-    fn never(_: &Rewrite) -> Result<PathBuf, String> {
+    fn never(_: &Rewrite) -> Result<PathBuf, Unkept> {
         loop {
             thread::park();
         }
