@@ -273,6 +273,32 @@ fn points_a_fixup_at_its_replacement_whatever_the_todo_list_shows() {
 }
 
 #[test]
+fn rewords_nothing_when_the_fixup_it_would_reword_becomes_empty() {
+    let (upstream, clone, [a, b, a2, b2, _]) = rewritten_with_fixup();
+    replaced(upstream.path(), &a, &a2);
+    replaced(upstream.path(), &b, &b2);
+    // The upstream holds the change of the fixup in a commit of its own, which is no
+    // cherry-pick of it, so that the pick of the fixup becomes empty.
+    std::fs::write(upstream.path().join("g"), "g").unwrap();
+    git(upstream.path(), &["add", "g"]);
+    commit(upstream.path(), "f", "f and g");
+    git(clone.path(), &["config", "rebase.autoSquash", "false"]);
+
+    // The rebase stops at the pick that became empty, and the operator skips it, after which the
+    // reword finds HEAD at the commit before it.
+    let (ok, stdout, _) = run(clone.path(), REBASE, &[]);
+    assert!(!ok);
+    assert!(stdout.contains("making"), "{stdout}");
+    let (ok, stdout, stderr) = run(clone.path(), "git", &["rebase", "--skip"]);
+    assert!(ok, "{stdout}{stderr}");
+    assert_eq!(
+        subjects(clone.path()),
+        ["base", "a'", "b'", "f and g", "x"],
+        "{stdout}{stderr}"
+    );
+}
+
+#[test]
 fn points_a_fixup_that_names_an_id_at_the_id_of_the_replacement() {
     let (upstream, clone, [a, b, a2, b2, _]) = rewritten_with_fixup();
     replaced(upstream.path(), &a, &a2);
