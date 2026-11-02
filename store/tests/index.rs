@@ -99,4 +99,17 @@ fn follows_the_notes_as_they_change() {
     git(&["update-ref", "-d", "refs/notes/replaces"]);
     let index = Index::open().unwrap();
     assert!(index.replaced_by(&x).unwrap().is_empty());
+    drop(index);
+
+    // A process that read the notes ref before another moved it, and brought the index up to
+    // date, uses the index as it is, which holds every line of the notes it read.
+    let [p, q, r, s] = ["p", "q", "r", "s"].map(commit);
+    rewrite(&p, &q);
+    let read = git(&["rev-parse", "refs/notes/replaces"]);
+    rewrite(&r, &s);
+    drop(Index::open().unwrap());
+    git(&["update-ref", "refs/notes/replaces", &read]);
+    let index = Index::open().unwrap();
+    assert_eq!(index.replaced_by(&p).unwrap(), set(&[&q]));
+    assert_eq!(index.replaced_by(&r).unwrap(), set(&[&s]));
 }

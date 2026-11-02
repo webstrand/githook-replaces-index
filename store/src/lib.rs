@@ -178,11 +178,33 @@ fn open_current(path: &std::path::Path, notes: Option<&str>) -> Result<Opened, E
         Err(source) => return Err(index_error(path, source)),
     };
     let indexed = indexed_notes(&db).map_err(|e| index_error(path, e))?;
-    Ok(if indexed.as_deref() == notes {
+    let current = match (indexed.as_deref(), notes) {
+        (indexed, notes) if indexed == notes => true,
+        // Lines are only ever added to the notes, so an index built from notes that descend from
+        // these holds every line of them: a process that read the ref just before another moved
+        // it and brought the index up to date uses the index as it is, rather than index the
+        // older notes anew.
+        (Some(indexed), Some(notes)) => is_ancestor(notes, indexed)?,
+        _ => false,
+    };
+    Ok(if current {
         Opened::Current(db)
     } else {
         Opened::Stale
     })
+}
+
+/// Whether the notes commit `ancestor` is `descendant` or one of its ancestors; not when git
+/// cannot tell, as for a commit the clone no longer has, which indexes the notes anew.
+fn is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, Error> {
+    let output = runner::run(&mut git([
+        "merge-base",
+        "--is-ancestor",
+        ancestor,
+        descendant,
+    ]))
+    .map_err(Error::Notes)?;
+    Ok(output.status.success())
 }
 
 /// The notes commit that `db` was built from, if any.
@@ -270,9 +292,7 @@ fn update(db: &Database, path: &std::path::Path, notes: Option<&str>) -> Result<
 /// the commit annotated and the note's blob, or `None` when the index must be built anew: when
 /// `to` does not descend from `from`, or a note was removed.
 fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Error> {
-    let ancestor =
-        runner::run(&mut git(["merge-base", "--is-ancestor", from, to])).map_err(Error::Notes)?;
-    if !ancestor.status.success() {
+    if !is_ancestor(from, to)? {
         return Ok(None);
     }
     // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each note that changed.
