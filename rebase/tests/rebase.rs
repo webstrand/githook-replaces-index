@@ -221,3 +221,38 @@ fn refuses_a_fixup_of_a_commit_left_out_that_the_upstream_lacks() {
     assert_eq!(git(clone.path(), &["rev-parse", "HEAD"]), head);
     assert!(!clone.path().join(".git/rebase-merge").exists());
 }
+
+#[test]
+fn fetches_the_remote_whose_refspec_makes_the_upstream() {
+    let (upstream, clone, [a, b, a2, b2]) = rewritten();
+    replaced(upstream.path(), &a, &a2);
+    replaced(upstream.path(), &b, &b2);
+    // The remote keeps its branches under another name than its own.
+    let clone = clone.path();
+    git(
+        clone,
+        &[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/mirror/*",
+        ],
+    );
+    git(clone, &["fetch", "-q", "origin"]);
+    git(clone, &["branch", "-q", "-u", "mirror/main"]);
+    git(clone, &["reflog", "expire", "--expire=now", "--all"]);
+
+    let (ok, stdout, stderr) = run(clone, REBASE, &[]);
+    assert!(ok, "{stderr}");
+    assert!(
+        stdout.contains("leaving out 2 it already holds"),
+        "{stdout}"
+    );
+    git(
+        clone,
+        &[
+            "rev-parse",
+            "--verify",
+            "refs/notes/remotes/origin/replaces",
+        ],
+    );
+}
