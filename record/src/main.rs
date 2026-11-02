@@ -28,8 +28,16 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     if cli.check_refspecs {
-        replaces_index_record::warn_forcing("replaces-index");
+        replaces_index_record::check_refspecs("replaces-index");
         return ExitCode::SUCCESS;
+    }
+    let prefix = if cli.gc {
+        "gc-replaces"
+    } else {
+        "replaces-index"
+    };
+    if !replaces_index_record::check_refspecs(prefix) {
+        return ExitCode::FAILURE;
     }
     if cli.gc {
         return match heartbeat::while_running("gc-replaces", "Ctrl-C to give up", gc) {

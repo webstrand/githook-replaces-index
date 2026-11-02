@@ -434,36 +434,42 @@ fn keeps_the_bytes_of_a_note_that_is_not_utf8() {
 }
 
 #[test]
-fn warns_of_a_refspec_that_replaces_the_notes_on_each_fetch() {
+fn refuses_while_a_refspec_replaces_the_notes_on_each_fetch() {
     let (dir, ids) = repo(["a", "b"]);
     let (repo, [a, b]) = (dir.path(), ids.each_ref());
     git(repo, &["remote", "add", "origin", "/nowhere"]).unwrap();
-    let key = "remote.origin.fetch";
     git(
         repo,
-        &["config", "--add", key, "+refs/notes/*:refs/notes/*"],
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/notes/*:refs/notes/*",
+        ],
     )
     .unwrap();
     let output = run_record(repo, &format!("{a} {b}\n"));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "{stderr}");
-    assert!(
-        stderr.contains("remote.origin.fetch +refs/notes/*:refs/notes/* replaces")
-            && stderr.contains("git config --add 'remote.origin.fetch' '^refs/notes/replaces'"),
-        "{stderr}"
-    );
+    assert!(!output.status.success(), "{stderr}");
+    insta::assert_snapshot!(stderr);
+    assert_eq!(note(repo, b), None);
 
-    // The command it gives keeps the ref out of the refspec, and the warning stops.
-    git(repo, &["config", "--add", key, "^refs/notes/replaces"]).unwrap();
-    let output = isolated(repo, RECORD, &["--check-refspecs"])
-        .output()
+    // The command it gives fetches the notes beside the local ones, and the refusal stops.
+    let (_, command) = stderr.trim_end().split_once(": git config ").unwrap();
+    let status = isolated(repo, "sh", &["-c", &format!("git config {command}")])
+        .status()
         .unwrap();
-    assert!(output.status.success());
+    assert!(status.success());
+    let fetch = git(repo, &["config", "--get-all", "remote.origin.fetch"]).unwrap();
     assert!(
-        output.stderr.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        fetch.contains("+refs/notes/*:refs/notes/remotes/origin/*")
+            && !fetch.contains("+refs/notes/*:refs/notes/*\n"),
+        "{fetch}"
     );
+    let output = run_record(repo, &format!("{a} {b}\n"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
 }
 
 #[test]

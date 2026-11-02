@@ -26,6 +26,9 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if !replaces_index_record::check_refspecs("compare-replaces") {
+        return ExitCode::FAILURE;
+    }
     let entries = match compare(&cli.old, &cli.new) {
         Ok(entries) => entries,
         Err(err) => {

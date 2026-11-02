@@ -17,3 +17,4 @@ tempfile = "3"
 runner = { package = "replaces-index-runner", path = "../runner" }
 replaces-index-pull = { path = "../pull" }
 replaces-index-compare = { path = "../compare" }
+replaces-index-record = { path = "../record" }

@@ -15,6 +15,9 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if !replaces_index_record::check_refspecs("pull-replaces") {
+        return ExitCode::FAILURE;
+    }
     let pulled =
         heartbeat::while_running("pull-replaces", "Ctrl-C to give up", || pull(&cli.remote));
     match pulled {

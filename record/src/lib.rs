@@ -23,7 +23,7 @@ mod error;
 pub mod heartbeat;
 mod repair;
 
-pub use crate::repair::{Repaired, repair, repair_and_say, warn_forcing};
+pub use crate::repair::{Repaired, check_refspecs, repair, repair_and_say};
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};

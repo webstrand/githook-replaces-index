@@ -31,6 +31,9 @@ struct Cli {}
 
 fn main() -> ExitCode {
     Cli::parse();
+    if !replaces_index_record::check_refspecs("replaces-index") {
+        return ExitCode::FAILURE;
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

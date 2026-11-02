@@ -67,6 +67,7 @@ fn main() -> ExitCode {
             Some(original) => reword(original, Path::new(message)).map(|()| ExitCode::SUCCESS),
             None => Ok(ExitCode::FAILURE),
         },
+        _ if !replaces_index_record::check_refspecs("rebase-replaces") => Ok(ExitCode::FAILURE),
         _ => rebase(cli.upstream.as_deref(), cli.keep_base),
     };
     result.unwrap_or_else(|err| {

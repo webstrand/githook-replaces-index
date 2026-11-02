@@ -17,6 +17,9 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if !replaces_index_record::check_refspecs("whereis") {
+        return ExitCode::FAILURE;
+    }
     match whereis(&cli.commit) {
         Ok(related) => {
             for r in related {

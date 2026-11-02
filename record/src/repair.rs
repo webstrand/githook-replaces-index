@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
 use runner::git;
+use runner::refspec::Refspec;
 
 use crate::{Change, Error, Notes, REF, REPLACES, all_notes, is_id, lines, notes_commit, write};
 
@@ -233,33 +234,56 @@ fn dropped(before: &str, after: &str) -> Result<Notes, Error> {
 
 /// Says on standard error, after `prefix`, which fetch refspecs move the ref whether or not it
 /// fast-forwards, as `+refs/notes/*:refs/notes/*` does, and so drop on each fetch what the clone
-/// recorded since, and how to keep the ref out of them.
-pub fn warn_forcing(prefix: &str) {
+/// recorded since, and how each comes to fetch the remote's notes beside the local ones. False
+/// when it named any, or could not read them.
+pub fn check_refspecs(prefix: &str) -> bool {
     let mut stderr = io::stderr();
-    match runner::refspec::forcing(REF) {
-        Ok(forcing) => {
-            for refspec in forcing {
-                let src = refspec.source_of(REF).unwrap_or_default();
-                let _ = writeln!(
-                    stderr,
-                    "{prefix}: remote.{}.fetch {} replaces {REF} on each fetch, dropping what this clone recorded since; to keep {REF} out of it: git config --add {} {}",
-                    refspec.remote,
-                    refspec.text,
-                    runner::quote(format!("remote.{}.fetch", refspec.remote).as_ref()).display(),
-                    runner::quote(format!("^{src}").as_ref()).display()
-                );
-            }
-        }
+    let forcing = match runner::refspec::forcing(REF) {
+        Ok(forcing) => forcing,
         Err(err) => {
             let _ = writeln!(stderr, "{prefix}: could not read the fetch refspecs: {err}");
+            return false;
         }
+    };
+    for refspec in &forcing {
+        let _ = writeln!(
+            stderr,
+            "{prefix}: remote.{}.fetch {} replaces {REF} on each fetch, dropping what this clone recorded since; {}",
+            refspec.remote,
+            refspec.text,
+            instead(refspec)
+        );
+    }
+    forcing.is_empty()
+}
+
+/// How the forcing `refspec` comes to fetch the remote's notes beside the local ones: with its
+/// destinations under refs/notes/remotes/<remote>/, where `git pull-replaces` merges them from.
+fn instead(refspec: &Refspec) -> String {
+    let remote = &refspec.remote;
+    match refspec
+        .dst
+        .as_deref()
+        .and_then(|dst| dst.strip_prefix("refs/notes/"))
+    {
+        Some(rest) => format!(
+            "to fetch the remote's notes beside this clone's: git config --replace-all --fixed-value {} {} {}",
+            runner::quote(format!("remote.{remote}.fetch").as_ref()).display(),
+            runner::quote(format!("+{}:refs/notes/remotes/{remote}/{rest}", refspec.src).as_ref())
+                .display(),
+            runner::quote(refspec.text.as_ref()).display(),
+        ),
+        None => format!(
+            "it must fetch {} into another ref, such as refs/notes/remotes/{remote}/replaces",
+            refspec.source_of(REF).unwrap_or_default()
+        ),
     }
 }
 
 /// Repairs the notes, and says on standard error, after `prefix`, what the repair put back, or
 /// why it could not check them; a failure to check does not stop the program.
 pub fn repair_and_say(prefix: &str) {
-    warn_forcing(prefix);
+    check_refspecs(prefix);
     let mut stderr = io::stderr();
     match repair() {
         Ok(repaired) => {

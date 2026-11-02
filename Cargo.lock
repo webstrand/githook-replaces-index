@@ -277,6 +277,7 @@ dependencies = [
  "clap",
  "replaces-index-compare",
  "replaces-index-pull",
+ "replaces-index-record",
  "replaces-index-runner",
  "tempfile",
  "thiserror",

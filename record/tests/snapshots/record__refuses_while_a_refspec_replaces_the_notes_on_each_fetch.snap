@@ -1,0 +1,5 @@
+---
+source: record/tests/record.rs
+expression: stderr
+---
+replaces-index: remote.origin.fetch +refs/notes/*:refs/notes/* replaces refs/notes/replaces on each fetch, dropping what this clone recorded since; to fetch the remote's notes beside this clone's: git config --replace-all --fixed-value 'remote.origin.fetch' '+refs/notes/*:refs/notes/remotes/origin/*' '+refs/notes/*:refs/notes/*'
