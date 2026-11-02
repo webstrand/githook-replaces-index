@@ -90,7 +90,7 @@ fn a_rebase_records_an_amend_of_a_commit_it_kept() {
 }
 
 #[test]
-fn a_rebase_that_rewrites_nothing_else_records_an_amend() {
+fn a_rebase_whose_picks_keep_their_commits_records_an_amend_at_its_exec_line() {
     let repo = repo();
     let a = commit(repo.path(), "a");
     // Every pick keeps its commit, so git reports no rewrite when the rebase ends.
