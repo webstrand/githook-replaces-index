@@ -91,7 +91,7 @@ printf '%s\n' '<old> <new>' … | "$(git rev-parse --git-common-dir)"/bin/replac
 replaces-index: the next rewrite records every abandoned record, as does "$(git rev-parse --git-common-dir)"/bin/replaces-index-record --abandoned
 ```
 
-The hook then exits with a failure status, which git ignores: the rewrite itself is complete. At the end of a rebase, the record holds the replacements as the hook would have recorded them, after they were followed through the amends set aside.
+The hook then exits with a failure status, which git ignores: the rewrite itself is complete. At the end of a rebase, the record holds the replacements as the hook would have recorded them, after they were followed through the amends set aside. A signal that comes while the hook follows them, which no git command can then help it finish, keeps the cruder form instead: the replacements as git reported them, and every amend set aside as it was made.
 
 Each record is a file of `<old> <new>` lines in `replaces-abandoned/` in the common git directory, which the worktrees share. It is named after the time it was written and a random suffix, so that the records sort in the order they were written. The hook writes it under a temporary name that begins with `.`, and renames it, so that a record either holds the whole rewrite or does not exist. When no record can be written, for instance because the disk is full, the hook says so and prints the command all the same. A standard error that cannot be written to, for instance once the terminal is gone, does not keep the record from being written.
 

@@ -59,7 +59,7 @@ pub fn post_rewrite(
     };
     let reported = Rewrite::parse(input);
     hold(Some(reported.clone()));
-    let rewrite = resolve(kind, reported);
+    let rewrite = resolve(kind, reported, outstanding);
     hold(Some(rewrite.clone()));
     // The abandoned records are recorded first, so that a rewrite that came later inherits what
     // they record, and are removed once recorded; they stay where they are when recording fails.
@@ -117,7 +117,13 @@ pub struct Failure {
 /// names commits that it would otherwise leave out, or which leaves out amends it cannot read:
 /// each replacement it records holds all the same, and a rewrite is not lost to a failure that
 /// recording it would not meet.
-fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
+///
+/// The amends are set aside while `outstanding` is locked, and it is made to hold what remains
+/// before it is let go of, so that a thread that ends the process keeps each amend either as git
+/// reported it or set aside, and never both. When the rebase ends, `outstanding` holds the cruder
+/// form while the replacements are followed, so that a thread that ends the process meanwhile
+/// keeps every amend set aside as well.
+fn resolve(kind: Kind, mut rewrite: Rewrite, outstanding: &Mutex<Option<Rewrite>>) -> Rewrite {
     if kind == Kind::FilterRepo {
         return rewrite;
     }
@@ -163,6 +169,9 @@ fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
                     }
                 }
             }
+            let mut held = outstanding
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Err(err) = set_aside(&state.join(AMENDED), &aside) {
                 warn(err, "the amend is recorded at once");
                 rewrite.replacements.extend(aside);
@@ -170,6 +179,7 @@ fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
             if let Err(err) = set_aside(&state.join(AT_ONCE), &rewrite.replacements) {
                 warn(err, "a later amend of the commit it made is set aside");
             }
+            *held = Some(rewrite.clone());
         }
         Kind::Rebase => {
             let amends = match Amends::read(&state.join(AMENDED)) {
@@ -179,6 +189,14 @@ fn resolve(kind: Kind, mut rewrite: Rewrite) -> Rewrite {
                     return rewrite;
                 }
             };
+            // Kept, should a signal end the hook before the replacements are followed, as the
+            // cruder form that a failure to follow them records: once a signal arrives, no git
+            // command runs to tell which amends to follow.
+            let mut crude = rewrite.clone();
+            crude.replacements.extend(amends.made.iter().cloned());
+            *outstanding
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(crude);
             match amends.follow(&rewrite, on_branch) {
                 Ok(followed) => rewrite = followed,
                 Err(err) => {
