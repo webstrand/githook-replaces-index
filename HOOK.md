@@ -27,7 +27,7 @@ The programs are written in Rust, each a crate in the directory of its name, in 
 | `whereis` | `git whereis <commit>`: prints the commits related to a commit by rewrites, and the refs that hold them |
 | `compare` | `git compare-replaces <old> <new>`: tells what one chain holds of each commit of another |
 | `pull` | `git pull-replaces <remote>`: merges a remote's replaces notes into the local ones |
-| `rebase` | `git rebase-replaces [<upstream>]`: rebases the current branch onto a rewritten upstream |
+| `rebase` | `git rebase-replaces [--keep-base] [<upstream>]`: rebases the current branch onto a rewritten upstream |
 | `record-filter-repo` | records the commits that a `git filter-repo` run made |
 
 The library crate `store` keeps the index that the queries read.
@@ -173,6 +173,8 @@ The refspec is a glob so that a remote without replaces notes matches nothing: a
 2. Of the commits of the branch that the upstream lacks, it leaves out each one for which `git compare-replaces HEAD <upstream>` prints a `held` line, and, when no `<upstream>` is named, each one that the configured upstream's reflog shows it once held, as `git rebase` uses its fork point only when it is named no upstream either: a named upstream is taken as it is.
 3. It names each commit it leaves out, and why: the upstream commits made from it, or the upstream's reflog.
 4. It replays the others onto the upstream through `git rebase -i`, with the commits left out marked `drop` in the list.
+
+`git rebase-replaces --keep-base [<upstream>]` restores the history that the branch shared with the upstream, without taking what the upstream added since: it replays the others onto the newest of the merge base and the upstream commits that replace the commits left out, as `git rebase --keep-base` replays them onto the merge base. That commit must descend from all the others; when the replacements lie on lines of history apart, the command refuses, and changes nothing.
 
 The rebase runs with `--no-autosquash`, whatever `rebase.autoSquash` says: a `fixup!`, `squash!` or `amend!` commit is replayed as a commit of its own, since folding it into a commit that the upstream holds would part the branch from the upstream again. One that the upstream holds in another form is left out as any other. One that names a commit left out, by its subject or an abbreviation of its id, as autosquash finds it, is reworded to name the commit of the upstream that replaces it, in the same form, so that the operator may fold it in later with `git rebase -i --autosquash`. When no single commit replaces it, it is replayed as it is, and the command says so.
 

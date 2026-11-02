@@ -1,4 +1,4 @@
-//! `git rebase-replaces [<upstream>]`
+//! `git rebase-replaces [--keep-base] [<upstream>]`
 //!
 //! Rebases the current branch onto <upstream>, by default its configured upstream, leaving out
 //! the commits that the upstream already holds in another form. `git pull --rebase` leaves out
@@ -19,7 +19,9 @@
 //! A commit that was rewritten as commits the upstream lacks is replayed, with a warning. The
 //! remaining commits are replayed onto the upstream by `git rebase -i`, with this program as its
 //! sequence editor, which marks the commits left out as `drop` in the list. No commit is folded
-//! into another, so that the branch keeps the commits it shares with the upstream.
+//! into another, so that the branch keeps the commits it shares with the upstream. With
+//! `--keep-base`, they are replayed onto the commit of the upstream that replaces the last commit
+//! the branch shared with it, rather than onto the upstream.
 
 mod error;
 
@@ -42,6 +44,11 @@ use crate::error::Error;
 struct Cli {
     /// The branch to rebase onto; by default the upstream of the current branch.
     upstream: Option<String>,
+    /// Replay the branch onto the commit of the upstream that replaces the last commit it shared
+    /// with the branch, rather than onto the upstream, as `git rebase --keep-base` replays it onto
+    /// the merge base.
+    #[arg(long)]
+    keep_base: bool,
     /// Marks as `drop` each pick in the todo list TODO of a commit listed in DROP; the rebase
     /// runs this program so as its sequence editor.
     #[arg(long, hide = true, num_args = 2, value_names = ["DROP", "TODO"])]
@@ -60,7 +67,7 @@ fn main() -> ExitCode {
             Some(original) => reword(original, Path::new(message)).map(|()| ExitCode::SUCCESS),
             None => Ok(ExitCode::FAILURE),
         },
-        _ => rebase(cli.upstream.as_deref()),
+        _ => rebase(cli.upstream.as_deref(), cli.keep_base),
     };
     result.unwrap_or_else(|err| {
         eprintln!("rebase-replaces: {err}");
@@ -69,7 +76,7 @@ fn main() -> ExitCode {
 }
 
 /// Rebases onto `upstream`, the configured upstream when none is named.
-fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
+fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
     let upstream = named.unwrap_or("@{upstream}");
     let upstream_error = |source| Error::Upstream {
         upstream: upstream.to_owned(),
@@ -109,6 +116,8 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
     let mut drop: Vec<(&str, String)> = Vec::new();
     // The commit of the upstream that replaces a commit left out, when a single one does.
     let mut replacements: HashMap<&str, &str> = HashMap::new();
+    // Every commit of the upstream that replaces a commit left out.
+    let mut replacing: Vec<&str> = Vec::new();
     let mut replayed: Vec<(&str, &[String])> = Vec::new();
     for entry in &local {
         let commit = entry.commit.as_str();
@@ -121,6 +130,7 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
                 if let [replacement] = &into[..] {
                     replacements.insert(commit, replacement);
                 }
+                replacing.extend(into.iter().map(String::as_str));
                 drop.push((
                     commit,
                     format!("{upstream} holds {} made from it", shorts(into)),
@@ -150,11 +160,23 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
     for (commit, why) in &drop {
         println!("rebase-replaces: leaving out {}: {why}", describe(commit));
     }
-    println!(
-        "rebase-replaces: replaying {} commits onto {upstream}, leaving out {} it already holds",
-        local.len() - drop.len(),
-        drop.len()
-    );
+    let onto = if keep_base {
+        let onto = kept_base(&up, &replacing, upstream)?;
+        let shown = describe(&onto);
+        println!(
+            "rebase-replaces: replaying {} commits onto {shown}, keeping the base, leaving out {} {upstream} already holds",
+            local.len() - drop.len(),
+            drop.len()
+        );
+        onto
+    } else {
+        println!(
+            "rebase-replaces: replaying {} commits onto {upstream}, leaving out {} it already holds",
+            local.len() - drop.len(),
+            drop.len()
+        );
+        up
+    };
 
     let tmp = tempfile::tempdir().map_err(Error::TempDir)?;
     let drop_path = tmp.path().join("drop");
@@ -175,7 +197,7 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
     let mut editor = quote(exe.as_os_str());
     editor.push(" --edit-todo ");
     editor.push(quote(drop_path.as_os_str()));
-    let status = git(["rebase", "-i", "--no-autosquash", &up])
+    let status = git(["rebase", "-i", "--no-autosquash", &onto])
         .env("GIT_SEQUENCE_EDITOR", editor)
         .status()
         .map_err(Error::Rebase)?;
@@ -184,6 +206,23 @@ fn rebase(named: Option<&str>) -> Result<ExitCode, Error> {
         Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         None => ExitCode::FAILURE,
     })
+}
+
+/// The commit of the upstream `up` to keep as the base: the newest of the merge base of HEAD and
+/// `up` and of the commits `replacing`, which replace the commits left out. It must descend from
+/// all the others: replacements on lines of history apart leave no base to keep.
+fn kept_base(up: &str, replacing: &[&str], upstream: &str) -> Result<String, Error> {
+    let base = runner::stdout(&mut git(["merge-base", "HEAD", up])).map_err(Error::List)?;
+    let mut independent = git(["merge-base", "--independent", base.trim()]);
+    independent.args(replacing);
+    let tips = runner::stdout(&mut independent).map_err(Error::List)?;
+    match tips.split_whitespace().collect::<Vec<_>>()[..] {
+        [tip] => Ok(tip.to_owned()),
+        ref tips => Err(Error::NoBase {
+            upstream: upstream.to_owned(),
+            tips: shorts(&tips.iter().map(|t| (*t).to_owned()).collect::<Vec<_>>()),
+        }),
+    }
 }
 
 /// The remote that a fetch brings the ref `full` from: the first whose fetch refspecs map a ref of

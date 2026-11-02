@@ -316,3 +316,40 @@ fn takes_a_named_upstream_as_it_is() {
     assert!(stdout.contains("leaving out 0"), "{stdout}");
     assert_eq!(git(repo, &["rev-parse", "HEAD"]), x);
 }
+
+#[test]
+fn keeps_the_base_that_replaces_the_commits_left_out() {
+    let (upstream, clone, [a, b, a2, b2]) = rewritten();
+    replaced(upstream.path(), &a, &a2);
+    replaced(upstream.path(), &b, &b2);
+    // The upstream went on past `b'`, which the clone does not take.
+    commit(upstream.path(), "c", "c");
+    git(clone.path(), &["reflog", "expire", "--expire=now", "--all"]);
+
+    let (ok, stdout, stderr) = run(clone.path(), REBASE, &["--keep-base"]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains("keeping the base"), "{stdout}");
+    assert_eq!(subjects(clone.path()), ["base", "a'", "b'", "x"]);
+}
+
+#[test]
+fn keeps_no_base_when_the_replacements_are_apart() {
+    let (upstream, clone, [a, b, _, _]) = rewritten();
+    let up = upstream.path();
+    // `a'` and `b'` on two lines of history that a merge joins.
+    git(up, &["reset", "-q", "--hard", "HEAD~2"]);
+    let a2 = commit(up, "a", "a'");
+    git(up, &["switch", "-q", "-c", "side", "HEAD~1"]);
+    let b2 = commit(up, "b", "b'");
+    git(up, &["switch", "-q", "main"]);
+    git(up, &["merge", "-q", "--no-edit", "side"]);
+    replaced(up, &a, &a2);
+    replaced(up, &b, &b2);
+    git(clone.path(), &["reflog", "expire", "--expire=now", "--all"]);
+    let head = git(clone.path(), &["rev-parse", "HEAD"]);
+
+    let (ok, _, stderr) = run(clone.path(), REBASE, &["--keep-base"]);
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("no base can be kept"), "{stderr}");
+    assert_eq!(git(clone.path(), &["rev-parse", "HEAD"]), head);
+}

@@ -26,6 +26,10 @@ pub enum Error {
     Read { path: PathBuf, source: io::Error },
     #[error("could not find this program's executable: {0}")]
     CurrentExe(#[source] io::Error),
+    #[error(
+        "the commits of {upstream} that replace those left out end in {tips}, apart, so that no base can be kept; nothing was rebased"
+    )]
+    NoBase { upstream: String, tips: String },
     #[error("could not run git rebase: {0}")]
     Rebase(#[source] io::Error),
 }
