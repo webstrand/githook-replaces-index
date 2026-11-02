@@ -406,3 +406,28 @@ fn records_in_a_sha256_repository() {
     let output = run_record(repo, &format!("{} {b}\n", &a[..40]));
     assert!(!output.status.success());
 }
+
+#[test]
+fn keeps_the_bytes_of_a_note_that_is_not_utf8() {
+    let (repo, [a, b]) = repo(["a", "b"]);
+    let file = repo.path().join("note");
+    std::fs::write(&file, b"by hand: \xff\xfe\r\n").unwrap();
+    // `-C` takes the blob as it is, where `-F` would strip the `\r`.
+    let blob = git(repo.path(), &["hash-object", "-w", file.to_str().unwrap()]).unwrap();
+    git(
+        repo.path(),
+        &["notes", "--ref=replaces", "add", "-C", blob.trim(), &b],
+    )
+    .unwrap();
+    record(repo.path(), &format!("{a} {b}\n"));
+    let output = isolated(
+        repo.path(),
+        "git",
+        &["cat-file", "blob", &format!("{REF}:{b}")],
+    )
+    .output()
+    .unwrap();
+    let mut expected = b"by hand: \xff\xfe\r\n".to_vec();
+    expected.extend_from_slice(format!("replaces: {a}\n").as_bytes());
+    assert_eq!(output.stdout, expected);
+}

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use runner::git;
 
-use crate::{Change, Error, REF, is_id, notes_commit, write};
+use crate::{Change, Error, REF, is_id, lines, notes_commit, write};
 
 /// The file of the common git directory that holds the commit up to which the reflog was checked.
 const CHECKED: &str = "replaces-checked";
@@ -127,16 +127,10 @@ fn drops_lines(before: &str, after: &str) -> Result<bool, Error> {
     }
     let blobs: Vec<&str> = pairs.iter().flat_map(|(old, new)| [*old, *new]).collect();
     let contents = runner::cat_file(&blobs).map_err(Error::Read)?;
-    let lines = |blob: &Option<Vec<u8>>| -> Vec<String> {
-        String::from_utf8_lossy(blob.as_deref().unwrap_or_default())
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    };
-    Ok(contents.chunks(2).any(|pair| {
-        let after = lines(&pair[1]);
-        lines(&pair[0]).iter().any(|line| !after.contains(line))
-    }))
+    let lines = |blob: &Option<Vec<u8>>| lines(blob.as_deref().unwrap_or_default());
+    Ok(contents
+        .chunks(2)
+        .any(|pair| !lines(&pair[0]).is_subset(&lines(&pair[1]))))
 }
 
 /// Repairs the notes, and says on standard error, after `prefix`, what the repair put back, or

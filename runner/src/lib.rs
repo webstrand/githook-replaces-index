@@ -166,6 +166,13 @@ pub fn stdout(command: &mut Command) -> Result<String, Error> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Runs a command, and returns its standard output as the bytes it wrote when it succeeds.
+pub fn stdout_bytes(command: &mut Command) -> Result<Vec<u8>, Error> {
+    let output = run(command)?;
+    check(command, &output)?;
+    Ok(output.stdout)
+}
+
 /// Runs a command for its effect.
 pub fn status(command: &mut Command) -> Result<(), Error> {
     stdout(command).map(drop)

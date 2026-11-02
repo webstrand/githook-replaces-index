@@ -26,8 +26,8 @@ mod repair;
 pub use crate::repair::{Repaired, repair, repair_and_say};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Write as _;
 use std::hash::{BuildHasher, RandomState};
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -85,8 +85,18 @@ impl Rewrite {
     }
 }
 
-/// The lines of notes, by the commit they annotate.
-type Notes = BTreeMap<String, BTreeSet<String>>;
+/// The lines of notes, by the commit they annotate. A line is the bytes that a note holds, which
+/// need not be UTF-8: a note from another clone, or one written by hand, may hold any.
+type Notes = BTreeMap<String, BTreeSet<Vec<u8>>>;
+
+/// The lines of the note `text`, each without its `\n`.
+pub(crate) fn lines(text: &[u8]) -> BTreeSet<Vec<u8>> {
+    let text = text.strip_suffix(b"\n").unwrap_or(text);
+    if text.is_empty() {
+        return BTreeSet::new();
+    }
+    text.split(|&b| b == b'\n').map(<[u8]>::to_vec).collect()
+}
 
 /// Records `rewrite` in the ref, retrying while other writers move it.
 pub fn record(rewrite: &Rewrite) -> Result<(), Error> {
@@ -310,7 +320,7 @@ fn random() -> u64 {
 }
 
 /// Writes the notes once.
-fn attempt(change: Change, ident: &mut Option<String>) -> Result<Attempt, Error> {
+fn attempt(change: Change, ident: &mut Option<Vec<u8>>) -> Result<Attempt, Error> {
     let parent = notes_commit()?;
     let (changed, theirs) = match change {
         Change::Rewrite(rewrite) => {
@@ -343,15 +353,19 @@ fn attempt(change: Change, ident: &mut Option<String>) -> Result<Attempt, Error>
     let ident = match ident {
         Some(ident) => ident,
         None => {
-            let found =
-                runner::stdout(&mut git(["var", "GIT_COMMITTER_IDENT"])).map_err(Error::Write)?;
-            ident.insert(found.trim_end().to_owned())
+            // The name and email of the committer are bytes of the config, which need not be UTF-8.
+            let mut found = runner::stdout_bytes(&mut git(["var", "GIT_COMMITTER_IDENT"]))
+                .map_err(Error::Write)?;
+            while found.last().is_some_and(u8::is_ascii_whitespace) {
+                found.pop();
+            }
+            ident.insert(found)
         }
     };
     let stream = stream(ident, parent.as_deref(), theirs, &changed);
     // Without --force, fast-import moves the ref only to a commit that holds the one it points at
     // when fast-import moves it, which a writer that came in between has moved it from.
-    match runner::stdout_with_input(&mut git(["fast-import", "--quiet"]), stream.as_bytes()) {
+    match runner::stdout_with_input(&mut git(["fast-import", "--quiet"]), &stream) {
         Ok(_) => Ok(Attempt::Written),
         Err(err) => refused(parent.as_deref(), err),
     }
@@ -442,13 +456,7 @@ fn union(ours: &str, theirs: &str) -> Result<Notes, Error> {
         .collect();
     // The contents of the blobs, in the order of `blobs`.
     let mut contents = runner::cat_file(&blobs).map_err(Error::Read)?.into_iter();
-    let mut next_lines = || -> BTreeSet<String> {
-        let text = contents.next().flatten().unwrap_or_default();
-        String::from_utf8_lossy(&text)
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    };
+    let mut next_lines = || lines(&contents.next().flatten().unwrap_or_default());
     let mut changed = Notes::new();
     for (commit, ours, theirs) in differing {
         let mut note = match ours {
@@ -564,11 +572,10 @@ fn read(notes: &str, wanted: &BTreeSet<&str>) -> Result<(Notes, Paths), Error> {
         let Some(text) = text else {
             continue;
         };
-        let text = String::from_utf8_lossy(&text);
         found
             .entry(commit.to_owned())
             .or_default()
-            .extend(text.lines().map(str::to_owned));
+            .extend(lines(&text));
         paths.entry(commit.to_owned()).or_default().push(path);
     }
     Ok((found, paths))
@@ -590,27 +597,27 @@ fn note_path(commit: &str, depth: usize) -> String {
 /// The notes that `rewrite` changes, given the `current` notes of the commits it involves, each
 /// with all of its lines.
 fn notes_of(current: &Notes, rewrite: &Rewrite) -> Notes {
-    let mut notes: HashMap<&str, BTreeSet<String>> = HashMap::new();
+    let mut notes: HashMap<&str, BTreeSet<Vec<u8>>> = HashMap::new();
     for (old, new) in &rewrite.replacements {
         if old == new {
             continue;
         }
         // A commit made earlier in the same rewrite passes on what it inherited there.
-        let inherited: Vec<String> = notes
+        let inherited: Vec<Vec<u8>> = notes
             .get(old.as_str())
             .or_else(|| current.get(old))
             .into_iter()
             .flatten()
-            .filter(|line| line.starts_with(REPLACES))
+            .filter(|line| line.starts_with(REPLACES.as_bytes()))
             .cloned()
             .collect();
         let note = notes
             .entry(new.as_str())
             .or_insert_with(|| current.get(new).cloned().unwrap_or_default());
-        note.insert(format!("{REPLACES}{old}"));
+        note.insert(format!("{REPLACES}{old}").into_bytes());
         note.extend(inherited);
         // A commit recreated with the id of one it stands in place of does not replace itself.
-        note.remove(&format!("{REPLACES}{new}"));
+        note.remove(format!("{REPLACES}{new}").as_bytes());
     }
     notes
         .into_iter()
@@ -628,24 +635,29 @@ fn notes_of(current: &Notes, rewrite: &Rewrite) -> Notes {
 /// `git notes` chooses the fanout of the trees it writes otherwise, and a merge may have left a
 /// note at another. Each note written by commit is therefore removed first from every path it was
 /// found at, so that the tree never holds two files for one commit.
-fn stream(ident: &str, parent: Option<&str>, theirs: Option<&str>, notes: &Changed) -> String {
+fn stream(ident: &[u8], parent: Option<&str>, theirs: Option<&str>, notes: &Changed) -> Vec<u8> {
     let message = if theirs.is_some() {
         "replaces-index: merge\n"
     } else {
         "replaces-index: record\n"
     };
-    let mut stream = format!(
-        "commit {REF}\ncommitter {ident}\ndata {}\n{message}",
-        message.len()
-    );
+    let mut stream = format!("commit {REF}\ncommitter ").into_bytes();
+    stream.extend_from_slice(ident);
+    let _ = write!(stream, "\ndata {}\n{message}", message.len());
     if let Some(parent) = parent {
         let _ = writeln!(stream, "from {parent}");
     }
     if let Some(theirs) = theirs {
         let _ = writeln!(stream, "merge {theirs}");
     }
-    let text = |lines: &BTreeSet<String>| -> String {
-        lines.iter().map(|line| format!("{line}\n")).collect()
+    let data = |stream: &mut Vec<u8>, lines: &BTreeSet<Vec<u8>>| {
+        let text: Vec<u8> = lines
+            .iter()
+            .flat_map(|line| line.iter().copied().chain(*b"\n"))
+            .collect();
+        let _ = writeln!(stream, "data {}", text.len());
+        stream.extend_from_slice(&text);
+        stream.push(b'\n');
     };
     match notes {
         Changed::ByCommit(notes, found) => {
@@ -653,18 +665,14 @@ fn stream(ident: &str, parent: Option<&str>, theirs: Option<&str>, notes: &Chang
                 for path in found.get(commit).into_iter().flatten() {
                     let _ = writeln!(stream, "D {path}");
                 }
-                let text = text(lines);
-                let _ = write!(stream, "N inline {commit}\ndata {}\n{text}\n", text.len());
+                let _ = writeln!(stream, "N inline {commit}");
+                data(&mut stream, lines);
             }
         }
         Changed::ByPath(notes) => {
             for (path, lines) in notes {
-                let text = text(lines);
-                let _ = write!(
-                    stream,
-                    "M 100644 inline {path}\ndata {}\n{text}\n",
-                    text.len()
-                );
+                let _ = writeln!(stream, "M 100644 inline {path}");
+                data(&mut stream, lines);
             }
         }
     }
@@ -679,7 +687,7 @@ mod tests {
         entries
             .iter()
             .map(|(commit, lines)| {
-                let lines = lines.iter().map(|line| line.to_string()).collect();
+                let lines = lines.iter().map(|line| line.as_bytes().to_vec()).collect();
                 (commit.to_string(), lines)
             })
             .collect()
