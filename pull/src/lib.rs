@@ -66,15 +66,16 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
     );
     // Every ref the glob fetched, which the merge keeps no need of, as it holds what it merged.
     // Their names are passed on as git printed them, whatever their bytes.
-    let refs = runner::stdout_bytes(&mut git([
+    let deleted = runner::stdout_bytes(&mut git([
         "for-each-ref",
         "--format=delete %(refname)",
         &format!("{fetched}/"),
     ]))
-    .map_err(fetch_error)?;
-    runner::stdout_bytes_with_input(&mut git(["update-ref", "--stdin"]), &refs)
-        .map_err(fetch_error)?;
-    pulled
+    .and_then(|refs| runner::stdout_bytes_with_input(&mut git(["update-ref", "--stdin"]), &refs));
+    // A failed pull is told of rather than the refs it could not delete, which gc deletes later.
+    let pulled = pulled?;
+    deleted.map_err(fetch_error)?;
+    Ok(pulled)
 }
 
 /// Starts a thread that, when a signal would end the pull, ends the git commands it runs, deletes
