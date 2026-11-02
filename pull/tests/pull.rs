@@ -308,3 +308,22 @@ fn merges_from_a_subdirectory_as_from_the_top() {
     assert!(ok, "{stderr}");
     assert_eq!(note(ours, &b), format!("replaces: {a}\nreplaces: {x}\n"));
 }
+
+#[test]
+fn merges_the_notes_of_a_url_and_keeps_no_ref_of_it() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    let (a, b, x) = (id('a'), id('b'), id('e'));
+    note_add(theirs, &b, &format!("replaces: {a}\n"));
+    note_add(ours, &b, &format!("replaces: {x}\n"));
+
+    let (ok, _, stderr) = run(ours, PULL, &[theirs.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    assert_eq!(note(ours, &b), format!("replaces: {a}\nreplaces: {x}\n"));
+    assert_eq!(
+        git(ours, &["for-each-ref", "--format=%(refname)"]),
+        format!("{REF}\n")
+    );
+}

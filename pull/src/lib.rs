@@ -21,37 +21,72 @@ pub enum Pulled {
     Absent,
 }
 
-/// Pulls the replaces notes of `remote`, fetching them alone.
+/// Pulls the replaces notes of `remote`, fetching them alone. `remote` is the name of a configured
+/// remote, whose notes are kept in refs/notes/remotes/<remote>/replaces, or, as `git pull` takes,
+/// a URL or path, whose notes are fetched into a ref of their own only until they are merged, as
+/// `git pull` keeps nothing of such a remote but FETCH_HEAD.
 pub fn pull(remote: &str) -> Result<Pulled, Error> {
-    let refspec = refspec(remote);
-    fetch_and_merge(
+    let fetch_error = |source| Error::Fetch {
+        remote: remote.to_owned(),
+        source,
+    };
+    let remotes = runner::stdout(&mut git(["remote"])).map_err(fetch_error)?;
+    if remotes.lines().any(|name| name == remote) {
+        let kept = kept(remote);
+        let refspec = refspec(&kept);
+        return fetch_and_merge(
+            remote,
+            &kept,
+            git(["fetch", "--porcelain", "-v", remote, &refspec]),
+        );
+    }
+    let fetched = format!("refs/replaces-index/fetched-{}", std::process::id());
+    let refspec = refspec(&format!("{fetched}/replaces"));
+    let pulled = fetch_and_merge(
         remote,
+        &format!("{fetched}/replaces"),
         git(["fetch", "--porcelain", "-v", remote, &refspec]),
-    )
+    );
+    // Every ref the glob fetched, which the merge keeps no need of, as it holds what it merged.
+    let refs = runner::stdout(&mut git([
+        "for-each-ref",
+        "--format=delete %(refname)",
+        &format!("{fetched}/"),
+    ]))
+    .map_err(fetch_error)?;
+    runner::stdout_with_input(&mut git(["update-ref", "--stdin"]), refs.as_bytes())
+        .map_err(fetch_error)?;
+    pulled
 }
 
 /// Fetches `remote` as `git fetch <remote>` does, and pulls its replaces notes, which the same
 /// fetch brings. `remote` must be the name of a configured remote.
 pub fn fetch_and_pull(remote: &str) -> Result<Pulled, Error> {
+    let kept = kept(remote);
     // Added to the refspecs that the remote's configuration gives, which a refspec named on the
     // command line would replace.
-    let config = format!("remote.{remote}.fetch={}", refspec(remote));
+    let config = format!("remote.{remote}.fetch={}", refspec(&kept));
     fetch_and_merge(
         remote,
+        &kept,
         git(["-c", &config, "fetch", "--porcelain", "-v", remote]),
     )
 }
 
-/// The refspec that fetches the remote's notes. It is a glob, so that a remote without notes
-/// matches nothing rather than failing the fetch; the `*` matches the empty string.
-fn refspec(remote: &str) -> String {
-    format!("+refs/notes/replaces*:refs/notes/remotes/{remote}/replaces*")
+/// The ref that keeps the notes of the configured remote `remote`.
+fn kept(remote: &str) -> String {
+    format!("refs/notes/remotes/{remote}/replaces")
 }
 
-/// Runs `fetch`, a `git fetch --porcelain -v` that fetches the remote's notes, and merges what it
-/// fetched.
-fn fetch_and_merge(remote: &str, mut fetch: Command) -> Result<Pulled, Error> {
-    let theirs = format!("refs/notes/remotes/{remote}/replaces");
+/// The refspec that fetches the remote's notes into `theirs`. It is a glob, so that a remote
+/// without notes matches nothing rather than failing the fetch; the `*` matches the empty string.
+fn refspec(theirs: &str) -> String {
+    format!("+refs/notes/replaces*:{theirs}*")
+}
+
+/// Runs `fetch`, a `git fetch --porcelain -v` that fetches the notes of `remote` into `theirs`,
+/// and merges what it fetched.
+fn fetch_and_merge(remote: &str, theirs: &str, mut fetch: Command) -> Result<Pulled, Error> {
     let out = runner::stdout(&mut fetch).map_err(|source| Error::Fetch {
         remote: remote.to_owned(),
         source,

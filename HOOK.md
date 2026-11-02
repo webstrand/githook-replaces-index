@@ -151,6 +151,8 @@ Each clone records the rewrites made in it. `git pull-replaces <remote>` merges 
 1. It fetches the remote's `refs/notes/replaces` into `refs/notes/remotes/<remote>/replaces`, through one `git fetch`, whose output also tells whether the remote has any. The fetch names its refspec itself, so the remote needs no configuration.
 2. It merges that into the local `refs/notes/replaces` as `record` writes it: the merge takes the union of each note's lines, which never conflicts, keeps the remote's notes commit as a parent, and moves the ref only from the commit it read, retrying as `record` does. A note that the local ref lacks is written at the fanout of the local notes, rather than at its path in the remote's, whose fanout may differ. When either notes commit holds the other, the ref is left as it is, or moved to the remote's.
 
+`<remote>` may also be a URL or a path, as `git pull` takes: the notes are then fetched into a ref of their own, which is deleted once they are merged, so that nothing of such a remote is kept, as `git pull` keeps nothing of it but `FETCH_HEAD`.
+
 Lines are only ever added to notes, so the union is the whole merge. The remote is not changed. Two clones that each record rewrites hold the same notes once each has pulled from the other, after the last rewrite in either; a host that cannot reach the operator's clone receives no notes from it. A clone may pull from several remotes in turn.
 
 Nothing merges a remote's notes until a pull runs: the installer cannot know which remotes share them, and says so when it finishes. The replaces notes of a remote may also be fetched by every `git fetch`, for reading between pulls, by adding a refspec to the remote's configuration:

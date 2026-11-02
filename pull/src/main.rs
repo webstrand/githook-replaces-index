@@ -9,7 +9,7 @@ use replaces_index_record::{REF, heartbeat};
 #[derive(Parser)]
 #[command(name = "git pull-replaces", about)]
 struct Cli {
-    /// The remote whose notes to merge.
+    /// The remote whose notes to merge: a configured remote's name, or a URL or path.
     remote: String,
 }
 
