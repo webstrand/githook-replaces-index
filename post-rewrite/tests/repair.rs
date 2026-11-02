@@ -171,3 +171,39 @@ fn notes_moved_to_another_fanout_are_left_alone() {
     assert!(!stderr.contains("put back"), "{stderr}");
     assert_eq!(note(repo, &a2), [format!("replaces: {a}")]);
 }
+
+#[test]
+fn a_file_that_is_no_note_may_be_removed() {
+    let (repo, a, a2) = amended();
+    let repo = repo.path();
+    amend(repo, &a, &a2);
+    // Adds a file that is no note to the notes tree, then removes it.
+    let index = repo.join(".git/other-index");
+    let with_index = |args: &[&str]| {
+        let mut command = git(repo, args);
+        command.env("GIT_INDEX_FILE", &index);
+        ok_command(command)
+    };
+    let readme = ok(repo, &["hash-object", "-w", "--stdin"]);
+    for change in [
+        vec![
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{readme},README"),
+        ],
+        vec!["update-index", "--force-remove", "README"],
+    ] {
+        let last = ok(repo, &["rev-parse", "refs/notes/replaces"]);
+        with_index(&["read-tree", &last]);
+        with_index(&change);
+        let tree = with_index(&["write-tree"]);
+        let next = ok(repo, &["commit-tree", &tree, "-p", &last, "-m", "readme"]);
+        ok(repo, &["update-ref", "refs/notes/replaces", &next, &last]);
+    }
+
+    let b = commit(repo, "b");
+    let b2 = amend_of(repo, &b);
+    let stderr = amend(repo, &b, &b2);
+    assert!(!stderr.contains("put back"), "{stderr}");
+}

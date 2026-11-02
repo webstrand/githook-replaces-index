@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use runner::git;
 
-use crate::{Change, Error, REF, notes_commit, write};
+use crate::{Change, Error, REF, is_id, notes_commit, write};
 
 /// The file of the common git directory that holds the commit up to which the reflog was checked.
 const CHECKED: &str = "replaces-checked";
@@ -104,6 +104,10 @@ fn drops_lines(before: &str, after: &str) -> Result<bool, Error> {
             continue;
         };
         let commit = path.replace('/', "");
+        // A file whose path spells no commit id is no note, and holds no lines to drop.
+        if !is_id(&commit) {
+            continue;
+        }
         match status {
             "D" => {
                 removed.insert(commit, old);
