@@ -76,7 +76,7 @@ const NOTES: &str = "+refs/notes/replaces*:refs/notes/remotes/origin/replaces*";
 
 /// An upstream with `a` and `b`, a clone with `x` on top of them, and the upstream with `a` and
 /// `b` rewritten as `a'` and `b'` afterwards. The clone fetched `b` after it was made, so that
-/// the reflog of its remote-tracking branch, which a clone does not start, shows `b`.
+/// the reflog of its remote-tracking branch shows `b` in an entry of its own, after the clone's.
 fn rewritten() -> (tempfile::TempDir, tempfile::TempDir, [String; 4]) {
     let upstream = tempfile::tempdir().unwrap();
     let clone = tempfile::tempdir().unwrap();
@@ -197,7 +197,8 @@ fn replaced_from(repo: &Path, olds: &[&str], new: &str) {
 }
 
 /// `rewritten`, with `b'` changing `b`, and a `fixup! b` commit on top of the clone's `x`, in a
-/// clone whose `rebase.autoSquash` would fold it into `b`, and its id.
+/// clone whose `rebase.autoSquash` would fold it into `b`; returns the ids of `a`, `b`, `a'`, `b'`
+/// and the fixup.
 fn rewritten_with_fixup() -> (tempfile::TempDir, tempfile::TempDir, [String; 5]) {
     let (upstream, clone, [a, b, a2, _]) = rewritten();
     // `b'` changes `b`, so that git does not skip `b` as a commit the upstream applied already.

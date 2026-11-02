@@ -44,17 +44,17 @@ use crate::error::Error;
 struct Cli {
     /// The branch to rebase onto; by default the upstream of the current branch.
     upstream: Option<String>,
-    /// Replay the branch onto the commit of the upstream that replaces the last commit it shared
+    /// Replays the branch onto the commit of the upstream that replaces the last commit it shared
     /// with the branch, rather than onto the upstream, as `git rebase --keep-base` replays it onto
     /// the merge base.
     #[arg(long)]
     keep_base: bool,
-    /// Marks as `drop` each pick in the todo list TODO of a commit listed in DROP; the rebase
-    /// runs this program so as its sequence editor.
+    /// Marks as `drop` each pick in the todo list TODO of a commit listed in DROP; the rebase runs
+    /// this program with this option as its sequence editor.
     #[arg(long, hide = true, num_args = 2, value_names = ["DROP", "TODO"])]
     edit_todo: Option<Vec<PathBuf>>,
-    /// Gives HEAD the message in MESSAGE, if it is the commit the rebase made of ORIGINAL; the
-    /// todo list runs this program so after a pick to reword.
+    /// Gives HEAD the message in MESSAGE, if it is the commit the rebase made of ORIGINAL; an
+    /// `exec` line of the todo list runs this program with this option after a pick to reword.
     #[arg(long, hide = true, num_args = 2, value_names = ["ORIGINAL", "MESSAGE"])]
     reword: Option<Vec<OsString>>,
 }
@@ -76,7 +76,8 @@ fn main() -> ExitCode {
     })
 }
 
-/// Rebases onto `upstream`, the configured upstream when none is named.
+/// Rebases onto `named`, or onto the configured upstream when none is named; with `keep_base`,
+/// onto the commit that `kept_base` finds.
 fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
     let upstream = named.unwrap_or("@{upstream}");
     let upstream_error = |source| Error::Upstream {
@@ -113,12 +114,13 @@ fn rebase(named: Option<&str>, keep_base: bool) -> Result<ExitCode, Error> {
         None => held(&full, &up)?,
     };
     let local = compare("HEAD", &up).map_err(Error::Compare)?;
-    // Each commit left out, with why, and each replayed although it was rewritten, with into what.
+    // Each commit left out, with why.
     let mut drop: Vec<(&str, String)> = Vec::new();
     // The commit of the upstream that replaces a commit left out, when a single one does.
     let mut replacements: HashMap<&str, &str> = HashMap::new();
     // Every commit of the upstream that replaces a commit left out.
     let mut replacing: Vec<&str> = Vec::new();
+    // Each commit replayed although it was rewritten, with the commits it was rewritten as.
     let mut replayed: Vec<(&str, &[String])> = Vec::new();
     for entry in &local {
         let commit = entry.commit.as_str();
@@ -256,7 +258,7 @@ fn held(full: &str, up: &str) -> Result<HashSet<String>, Error> {
 
 /// Abbreviations of `commits`, for messages.
 fn shorts(commits: &[String]) -> String {
-    // The index holds only commit ids, which are ASCII; a name that were not is shown whole rather
+    // The index holds only commit ids, which are ASCII; a name that is not is shown whole rather
     // than cut inside a character.
     let shorts: Vec<&str> = commits.iter().map(|c| c.get(..12).unwrap_or(c)).collect();
     shorts.join(" ")
