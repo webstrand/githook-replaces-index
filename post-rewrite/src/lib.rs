@@ -288,7 +288,8 @@ fn on_branch(commit: &str) -> Result<bool, Error> {
     runner::is_ancestor(commit, "HEAD").map_err(Error::Branch)
 }
 
-/// Adds `replacements` to those kept in `path`.
+/// Adds `replacements` to those kept in `path`, from a line of their own, so that a line that an
+/// earlier append left unfinished runs into none of them.
 fn append(path: &Path, replacements: &[(String, String)]) -> Result<(), Error> {
     if replacements.is_empty() {
         return Ok(());
@@ -302,9 +303,12 @@ fn append(path: &Path, replacements: &[(String, String)]) -> Result<(), Error> {
         .append(true)
         .open(path)
         .map_err(to_error)?;
-    let lines: String = replacements
-        .iter()
-        .map(|(old, new)| format!("{old} {new}\n"))
+    let lines: String = std::iter::once("\n".to_owned())
+        .chain(
+            replacements
+                .iter()
+                .map(|(old, new)| format!("{old} {new}\n")),
+        )
         .collect();
     file.write_all(lines.as_bytes()).map_err(to_error)
 }
@@ -330,7 +334,11 @@ impl Replacements {
                 });
             }
         };
-        let made = Rewrite::parse(&text).replacements;
+        // A line that an append left unfinished names no commit, and is left out.
+        let mut made = Rewrite::parse(&text).replacements;
+        made.retain(|(old, new)| {
+            replaces_index_record::is_id(old) && replaces_index_record::is_id(new)
+        });
         // A commit rewritten twice is replaced by the commit that the later rewrite made.
         let last = made.iter().cloned().collect();
         Ok(Self { last, made })
@@ -376,5 +384,20 @@ impl Replacements {
             }
         }
         Ok(commit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_line_left_unfinished_spoils_no_later_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deferred");
+        let (a, b, c, d) = ["a", "b", "c", "d"].map(|c| c.repeat(40)).into();
+        fs::write(&path, format!("{a} {}", &b[..12])).unwrap();
+        append(&path, &[(c.clone(), d.clone())]).unwrap();
+        assert_eq!(Replacements::read(&path).unwrap().made, [(c, d)]);
     }
 }

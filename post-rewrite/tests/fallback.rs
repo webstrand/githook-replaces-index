@@ -35,6 +35,7 @@ fn rebase_onto_upstream(repo: &Path, script: &str) -> String {
 fn deferred(repo: &Path) -> Vec<(String, String)> {
     let text = fs::read_to_string(repo.join(".git/rebase-merge/replaces-index-deferred")).unwrap();
     text.lines()
+        .filter(|line| !line.is_empty())
         .map(|line| {
             let (old, new) = line.split_once(' ').unwrap();
             (old.to_owned(), new.to_owned())
