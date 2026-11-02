@@ -553,3 +553,47 @@ fn writes_beside_a_file_of_the_notes_tree_whose_path_is_not_utf8() {
     record(repo, &format!("{b} {c}\n"));
     assert_eq!(note(repo, c), Some(replaces(&[a, b])));
 }
+
+#[test]
+fn gc_deletes_the_refs_a_pull_left_behind_once_they_are_older_than_prune_expire() {
+    let (dir, ids) = repo(["a"]);
+    let (repo, [a]) = (dir.path(), ids.each_ref());
+    // Each ref is dated by its reflog, against the newest entry of the reflog of HEAD.
+    let dated = |name: &str, days_ago: u64| {
+        let time = 2_000_000_000 - days_ago * 86_400;
+        let status = isolated(
+            repo,
+            "git",
+            &[
+                "-c",
+                "core.logAllRefUpdates=always",
+                "update-ref",
+                "-m",
+                "dated",
+                name,
+                a,
+            ],
+        )
+        .env("GIT_COMMITTER_DATE", format!("@{time} +0000"))
+        .status()
+        .unwrap();
+        assert!(status.success());
+    };
+    dated("refs/replaces-index/fetched-1/replaces", 15);
+    dated("refs/replaces-index/fetched-2/replaces", 13);
+    dated("HEAD", 0);
+
+    let output = isolated(repo, RECORD, &["--gc"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let left = git(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/replaces-index/",
+        ],
+    )
+    .unwrap();
+    assert_eq!(left.trim(), "refs/replaces-index/fetched-2/replaces");
+}

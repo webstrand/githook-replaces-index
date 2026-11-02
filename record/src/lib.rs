@@ -20,6 +20,7 @@
 
 pub mod abandoned;
 mod error;
+pub mod fetched;
 pub mod heartbeat;
 mod repair;
 

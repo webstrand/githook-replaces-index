@@ -9,6 +9,7 @@ mod error;
 use std::process::Command;
 
 use replaces_index_record::REF;
+use replaces_index_record::fetched::FETCHED;
 use runner::git;
 
 pub use crate::error::Error;
@@ -41,12 +42,21 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
             git(["fetch", "--porcelain", "-v", remote, &refspec]),
         );
     }
-    let fetched = format!("refs/replaces-index/fetched-{}", std::process::id());
+    let fetched = format!("{FETCHED}{}", std::process::id());
     let refspec = refspec(&format!("{fetched}/replaces"));
+    // The reflog dates the refs, so that `git gc-replaces` tells those a pull left behind.
     let pulled = fetch_and_merge(
         remote,
         &format!("{fetched}/replaces"),
-        git(["fetch", "--porcelain", "-v", remote, &refspec]),
+        git([
+            "-c",
+            "core.logAllRefUpdates=always",
+            "fetch",
+            "--porcelain",
+            "-v",
+            remote,
+            &refspec,
+        ]),
     );
     // Every ref the glob fetched, which the merge keeps no need of, as it holds what it merged.
     // Their names are passed on as git printed them, whatever their bytes.

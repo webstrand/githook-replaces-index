@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::process::ExitCode;
 
 use clap::Parser;
-use replaces_index_record::{Error, Rewrite, abandoned, gc, heartbeat, record};
+use replaces_index_record::{Error, Rewrite, abandoned, fetched, gc, heartbeat, record};
 
 #[derive(Parser)]
 #[command(name = "record", about)]
@@ -47,7 +47,17 @@ fn main() -> ExitCode {
                     collected.removed, collected.kept
                 );
                 replaces_index_record::repair_and_say("gc-replaces");
-                ExitCode::SUCCESS
+                match fetched::sweep() {
+                    Ok(0) => ExitCode::SUCCESS,
+                    Ok(swept) => {
+                        println!("gc-replaces: deleted {swept} refs that pulls left behind");
+                        ExitCode::SUCCESS
+                    }
+                    Err(err) => {
+                        eprintln!("gc-replaces: {err}");
+                        ExitCode::FAILURE
+                    }
+                }
             }
             Err(err) => {
                 eprintln!("gc-replaces: {err}");
