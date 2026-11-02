@@ -1,8 +1,8 @@
 //! Pulls a remote's replaces notes: fetches its refs/notes/replaces into
 //! refs/notes/remotes/<remote>/replaces, and merges that into the local ref as `record` writes it,
 //! taking the union of each note's lines and moving the ref only from the commit it read. Lines are
-//! only ever added to the notes, so the union is the whole merge. The remote is not changed; it pulls from this
-//! clone in turn.
+//! only ever added to the notes, so the union is the whole merge. The remote is not changed; it
+//! pulls from this clone in turn.
 
 mod error;
 

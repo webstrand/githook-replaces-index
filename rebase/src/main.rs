@@ -12,8 +12,8 @@
 //!
 //! - the upstream holds a commit that was made from it, through any number of rewrites, as
 //!   `compare` finds through the index of refs/notes/replaces; or
-//! - no <upstream> was named, and the reflog of the configured upstream shows that it once held
-//!   it, and has since dropped or replaced it, as `git rebase` does with its fork point when it is
+//! - no <upstream> was named, and the reflog of the configured upstream shows that it once held it,
+//!   and has since dropped or replaced it, as `git rebase` does with its fork point when it is
 //!   named no upstream either.
 //!
 //! A commit that was rewritten as commits the upstream lacks is replayed, with a warning. The

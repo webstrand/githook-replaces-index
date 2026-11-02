@@ -6,10 +6,11 @@
 //! aside instead of recorded, and when the rebase ends, each replacement it reports is followed
 //! through them to the last commit that took its place and is still on the branch, so that no
 //! commit the rebase discarded is named. An amend whose commit is no longer on the branch, because
-//! it was undone, for instance by a `git reset` back to the amended commit, is not followed. They are set aside in the rebase's
-//! state directory, which git removes when the rebase ends or is aborted. `git am` keeps its
-//! state in rebase-apply/ as well, but marks it with `applying` rather than `rebasing`, and runs
-//! no post-rewrite when it ends, so an amend while it is stopped is recorded at once.
+//! it was undone, for instance by a `git reset` back to the amended commit, is not followed. They
+//! are set aside in the rebase's state directory, which git removes when the rebase ends or is
+//! aborted. `git am` keeps its state in rebase-apply/ as well, but marks it with `applying` rather
+//! than `rebasing`, and runs no post-rewrite when it ends, so an amend while it is stopped is
+//! recorded at once.
 //!
 //! An amend during a rebase of a commit that was there before the rebase began, such as one that a
 //! pick kept as it was or the commit the rebase is onto, is recorded at once as well: the rebase

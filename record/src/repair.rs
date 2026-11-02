@@ -12,8 +12,7 @@
 //! The commit up to which the reflog was checked is kept in the ref `refs/replaces-index/checked`,
 //! so that each step is checked once, and so that garbage collection keeps the commit: once the
 //! reflog no longer holds it, the step from it to the oldest commit the reflog holds is checked
-//! as one. A clone that keeps no reflog of the notes ref,
-//! as a bare one by default, is not checked.
+//! as one. A clone that keeps no reflog of the notes ref, as a bare one by default, is not checked.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -31,8 +30,8 @@ pub struct Repaired {
     /// The steps of the reflog, from one commit to the next, that dropped lines of notes of
     /// commits the clone has, or that no note names; their lines are back.
     pub steps: Vec<(String, String)>,
-    /// Each commit that the clone no longer has whose note lost lines, with the commits whose notes
-    /// name it, which now hold them.
+    /// Each commit that the clone no longer has whose note lost lines, with the commits whose
+    /// notes name it, which now hold them.
     pub folded: Vec<(String, Vec<String>)>,
 }
 
