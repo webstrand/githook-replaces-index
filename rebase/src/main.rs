@@ -255,9 +255,9 @@ fn held(full: &str, up: &str) -> Result<HashSet<String>, Error> {
 
 /// Abbreviations of `commits`, for messages.
 fn shorts(commits: &[String]) -> String {
-    // TODO: a note that arrived from another clone may name anything, not only an ASCII commit
-    // id; this and the other places that slice or print such names need to handle any bytes.
-    let shorts: Vec<&str> = commits.iter().map(|c| &c[..c.len().min(12)]).collect();
+    // The index holds only commit ids, which are ASCII; a name that were not is shown whole rather
+    // than cut inside a character.
+    let shorts: Vec<&str> = commits.iter().map(|c| c.get(..12).unwrap_or(c)).collect();
     shorts.join(" ")
 }
 
