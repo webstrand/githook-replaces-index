@@ -45,7 +45,10 @@ pub fn repair() -> Result<Repaired, Error> {
     if output.status.code() != Some(1) {
         runner::check(&read_checked, &output).map_err(Error::Read)?;
     }
-    let checked = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let checked = runner::text(&read_checked, output.stdout)
+        .map_err(Error::Read)?
+        .trim()
+        .to_owned();
     let checked = (!checked.is_empty()).then_some(checked);
     let Some(current) = notes_commit()? else {
         return Ok(Repaired::default());
@@ -154,7 +157,7 @@ fn placed(
 /// The lines of the notes of the notes commit `before` that the notes commit `after` lacks, by
 /// the commit whose note held them.
 fn dropped(before: &str, after: &str) -> Result<Notes, Error> {
-    let out = runner::stdout(&mut git([
+    let out = runner::stdout_bytes(&mut git([
         "diff-tree",
         "-r",
         "-z",
@@ -166,10 +169,14 @@ fn dropped(before: &str, after: &str) -> Result<Notes, Error> {
     // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each file that changed. A note that
     // moved to another fanout, as every note does once their number crosses a power of 256, shows
     // as removed at one path and added at another, and is compared by the commit it annotates.
-    let mut fields = out.split('\0');
+    let mut fields = runner::nul_fields(&out);
     let mut olds = BTreeMap::new();
     let mut news = BTreeMap::new();
     while let (Some(meta), Some(path)) = (fields.next(), fields.next()) {
+        // A file whose path is not UTF-8 is no note.
+        let (Some(meta), Some(path)) = (meta, path) else {
+            continue;
+        };
         let words: Vec<&str> = meta.split(' ').collect();
         let [_, _, old, new, status] = words[..] else {
             continue;

@@ -48,13 +48,14 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
         git(["fetch", "--porcelain", "-v", remote, &refspec]),
     );
     // Every ref the glob fetched, which the merge keeps no need of, as it holds what it merged.
-    let refs = runner::stdout(&mut git([
+    // Their names are passed on as git printed them, whatever their bytes.
+    let refs = runner::stdout_bytes(&mut git([
         "for-each-ref",
         "--format=delete %(refname)",
         &format!("{fetched}/"),
     ]))
     .map_err(fetch_error)?;
-    runner::stdout_with_input(&mut git(["update-ref", "--stdin"]), refs.as_bytes())
+    runner::stdout_bytes_with_input(&mut git(["update-ref", "--stdin"]), &refs)
         .map_err(fetch_error)?;
     pulled
 }

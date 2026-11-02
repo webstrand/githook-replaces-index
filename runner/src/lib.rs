@@ -17,6 +17,8 @@ pub enum Error {
     Spawn { command: String, source: io::Error },
     #[error("could not pass input to {command}: {source}")]
     Input { command: String, source: io::Error },
+    #[error("{command} printed what is not UTF-8, which this program cannot read yet")]
+    NotUtf8 { command: String },
     #[error("{command} failed ({status}){}", stderr_suffix(.stderr))]
     Failed {
         command: String,
@@ -157,16 +159,41 @@ pub fn run_with_input(command: &mut Command, input: &[u8]) -> Result<Output, Err
 /// Runs a command with `input` as its standard input, and returns its standard output when it
 /// succeeds.
 pub fn stdout_with_input(command: &mut Command, input: &[u8]) -> Result<String, Error> {
-    let output = run_with_input(command, input)?;
-    check(command, &output)?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let output = stdout_bytes_with_input(command, input)?;
+    text(command, output)
 }
 
 /// Runs a command, and returns its standard output when it succeeds.
 pub fn stdout(command: &mut Command) -> Result<String, Error> {
-    let output = run(command)?;
+    let output = stdout_bytes(command)?;
+    text(command, output)
+}
+
+/// `output` of `command` as text; a failure when it is not UTF-8, rather than text that names
+/// something else.
+// TODO(EuString): output that is not UTF-8 can be read as no text at all.
+pub fn text(command: &Command, output: Vec<u8>) -> Result<String, Error> {
+    String::from_utf8(output).map_err(|_| Error::NotUtf8 {
+        command: describe(command),
+    })
+}
+
+/// The fields of `output` that a `-z` option of git ends with `\0`, each as text, or `None` for
+/// one that is not UTF-8, such as a path of a file in a notes tree that is no note.
+pub fn nul_fields(output: &[u8]) -> impl Iterator<Item = Option<&str>> {
+    let output = output.strip_suffix(b"\0").unwrap_or(output);
+    output
+        .split(|&b| b == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| std::str::from_utf8(field).ok())
+}
+
+/// Runs a command with `input` as its standard input, and returns its standard output as the
+/// bytes it wrote when it succeeds.
+pub fn stdout_bytes_with_input(command: &mut Command, input: &[u8]) -> Result<Vec<u8>, Error> {
+    let output = run_with_input(command, input)?;
     check(command, &output)?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(output.stdout)
 }
 
 /// Runs a command, and returns its standard output as the bytes it wrote when it succeeds.
@@ -217,6 +244,7 @@ pub fn check(command: &Command, output: &Output) -> Result<(), Error> {
     Err(Error::Failed {
         command: describe(command),
         status: output.status,
+        // TODO(EuString): for a message only, but bytes that are not UTF-8 are shown otherwise.
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
     })
 }
@@ -292,6 +320,7 @@ pub fn cat_file<S: AsRef<str>>(ids: &[S]) -> Result<Vec<Option<Vec<u8>>>, Error>
 pub fn describe(command: &Command) -> String {
     std::iter::once(command.get_program())
         .chain(command.get_args())
+        // TODO(EuString): for a message only, but bytes that are not UTF-8 are shown otherwise.
         .map(|arg| arg.to_string_lossy())
         .collect::<Vec<_>>()
         .join(" ")

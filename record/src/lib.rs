@@ -147,7 +147,7 @@ pub fn record_then(rewrite: &Rewrite, written: impl FnOnce()) -> Result<(), Erro
 /// Whether `word` is the full id of an object of this repository, as git writes it: lowercase hex
 /// digits, 40 of them in a SHA-1 repository and 64 in a SHA-256 one. Another form names the same
 /// object to git, but no query matches it, since the notes hold ids as git writes them.
-pub(crate) fn is_id(word: &str) -> bool {
+pub fn is_id(word: &str) -> bool {
     let length_fits = match id_length() {
         Some(length) => word.len() == length,
         None => matches!(word.len(), 40 | 64),
@@ -618,11 +618,11 @@ struct NoteFile {
 /// The notes of the notes commit `notes`, by the commit they annotate. A file whose path does not
 /// spell a commit id is not a note.
 fn note_files(notes: &str) -> Result<BTreeMap<String, NoteFile>, Error> {
-    let out = runner::stdout(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
+    let out = runner::stdout_bytes(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
         .map_err(Error::Read)?;
-    // `<mode> blob <blob>\t<path>` for each file.
-    Ok(out
-        .split('\0')
+    // `<mode> blob <blob>\t<path>` for each file; one whose path is not UTF-8 is no note.
+    Ok(runner::nul_fields(&out)
+        .flatten()
         .filter_map(|entry| {
             let (meta, path) = entry.split_once('\t')?;
             let blob = meta.strip_prefix("100644 blob ")?;

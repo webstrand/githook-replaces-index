@@ -1,6 +1,6 @@
 //! The fetch refspecs of the remotes, as the config of the repository holds them.
 
-use crate::{Error, check, git, run};
+use crate::{Error, check, git, run, text};
 
 /// A fetch refspec of a remote: `[+]<src>:<dst>`, or `^<src>`, which excludes the refs that
 /// `<src>` matches from the other refspecs of the remote.
@@ -76,8 +76,7 @@ pub fn fetch_refspecs() -> Result<Vec<Refspec>, Error> {
         return Ok(Vec::new());
     }
     check(&config, &output)?;
-    // TODO(EuString): a remote name or refspec that is not UTF-8 is read lossily.
-    let out = String::from_utf8_lossy(&output.stdout);
+    let out = text(&config, output.stdout)?;
     // `remote.<name>.fetch\n<refspec>\0` for each refspec.
     Ok(out
         .split('\0')

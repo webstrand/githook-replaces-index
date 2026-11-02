@@ -510,3 +510,33 @@ fn gc_removes_the_notes_of_commits_gone_and_keeps_their_lines() {
         Some(format!("{line}\n").as_str())
     );
 }
+
+#[test]
+fn writes_beside_a_file_of_the_notes_tree_whose_path_is_not_utf8() {
+    let (dir, ids) = repo(["a", "b", "c"]);
+    let (repo, [a, b, c]) = (dir.path(), ids.each_ref());
+    record(repo, &format!("{a} {b}\n"));
+    // A file that is no note, at a path that is not UTF-8, added to the notes tree.
+    let blob = git(repo, &["hash-object", "-w", "--stdin"]).unwrap();
+    let notes = git(repo, &["rev-parse", &format!("{REF}^{{tree}}")]).unwrap();
+    let mut listing = isolated(repo, "git", &["ls-tree", notes.trim()])
+        .output()
+        .unwrap()
+        .stdout;
+    listing.extend_from_slice(format!("100644 blob {}\t", blob.trim()).as_bytes());
+    listing.extend_from_slice(b"\xff\n");
+    let mut mktree = isolated(repo, "git", &["mktree"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    mktree.stdin.take().unwrap().write_all(&listing).unwrap();
+    let tree = String::from_utf8(mktree.wait_with_output().unwrap().stdout).unwrap();
+    let parent = git(repo, &["rev-parse", REF]).unwrap();
+    let args = ["commit-tree", tree.trim(), "-p", parent.trim(), "-m", "odd"];
+    let commit = git(repo, &args).unwrap();
+    git(repo, &["update-ref", REF, commit.trim()]).unwrap();
+
+    record(repo, &format!("{b} {c}\n"));
+    assert_eq!(note(repo, c), Some(replaces(&[a, b])));
+}

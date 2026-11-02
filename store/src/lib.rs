@@ -25,7 +25,7 @@ use redb::{
     Database, DatabaseError, MultimapTableDefinition, ReadOnlyDatabase, ReadableDatabase,
     TableDefinition,
 };
-use replaces_index_record::{REF, REPLACES};
+use replaces_index_record::{REF, REPLACES, is_id};
 use runner::git;
 
 pub use crate::error::Error;
@@ -261,15 +261,14 @@ fn indexed_notes(db: &impl ReadableDatabase) -> Result<Option<String>, redb::Err
 
 /// The commit of the notes ref, if it exists.
 fn notes_commit() -> Result<Option<String>, Error> {
-    let output = runner::run(&mut git([
-        "rev-parse",
-        "-q",
-        "--verify",
-        &format!("{REF}^{{commit}}"),
-    ]))
-    .map_err(Error::Notes)?;
-    let id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    Ok((output.status.success() && !id.is_empty()).then_some(id))
+    let mut rev_parse = git(["rev-parse", "-q", "--verify", &format!("{REF}^{{commit}}")]);
+    let output = runner::run(&mut rev_parse).map_err(Error::Notes)?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let id = runner::text(&rev_parse, output.stdout).map_err(Error::Notes)?;
+    let id = id.trim();
+    Ok((!id.is_empty()).then(|| id.to_owned()))
 }
 
 /// Brings `db` up to date with the notes commit `notes`.
@@ -305,10 +304,16 @@ fn update(db: &Database, path: &std::path::Path, notes: Option<&str>) -> Result<
             .open_multimap_table(REPLACED_BY_TABLE)
             .map_err(|e| err(e.into()))?;
         for (commit, text) in commits.iter().zip(&contents) {
-            let text = String::from_utf8_lossy(text.as_deref().unwrap_or_default());
-            for old in text.lines().filter_map(|line| line.strip_prefix(REPLACES)) {
-                let old = old.trim();
-                if old.is_empty() || old == commit {
+            let text = text.as_deref().unwrap_or_default();
+            // A line that names no commit id, as one written by hand may, records nothing.
+            let olds = text
+                .split(|&b| b == b'\n')
+                .filter_map(|line| line.strip_prefix(REPLACES.as_bytes()))
+                .filter_map(|old| std::str::from_utf8(old).ok())
+                .map(str::trim)
+                .filter(|old| is_id(old));
+            for old in olds {
+                if old == commit {
                     continue;
                 }
                 replaces
@@ -337,7 +342,7 @@ fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Er
         return Ok(None);
     }
     // `:<mode> <mode> <blob> <blob> <status>\0<path>\0` for each note that changed.
-    let diff = runner::stdout(&mut git([
+    let diff = runner::stdout_bytes(&mut git([
         "diff-tree",
         "-r",
         "-z",
@@ -348,10 +353,17 @@ fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Er
     .map_err(Error::Notes)?;
     // A note that moved to another fanout shows as removed at one path and added at another, and
     // was removed only if it was added nowhere.
-    let mut fields = diff.split('\0').filter(|field| !field.is_empty());
+    let mut fields = runner::nul_fields(&diff);
     let mut changed = Vec::new();
     let mut removed = BTreeSet::new();
     while let (Some(header), Some(path)) = (fields.next(), fields.next()) {
+        let Some(header) = header else {
+            return Ok(None);
+        };
+        // A file whose path is not UTF-8, or does not spell a commit id, is no note.
+        let Some(path) = path.filter(|path| is_id(&path.replace('/', ""))) else {
+            continue;
+        };
         let words: Vec<&str> = header.split(' ').collect();
         let (Some(blob), Some(status)) = (words.get(3), words.get(4)) else {
             return Ok(None);
@@ -374,14 +386,16 @@ fn added_since(from: &str, to: &str) -> Result<Option<Vec<(String, String)>>, Er
 /// Every note of the notes commit `notes`, as pairs of the commit annotated and the note's blob.
 fn all_notes(notes: &str) -> Result<Vec<(String, String)>, Error> {
     // `<mode> blob <blob>\t<path>\0` for each note.
-    let tree = runner::stdout(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
+    let tree = runner::stdout_bytes(&mut git(["ls-tree", "-r", "-z", "--full-tree", notes]))
         .map_err(Error::Notes)?;
-    Ok(tree
-        .split('\0')
+    // A file whose path is not UTF-8, or does not spell a commit id, is no note.
+    Ok(runner::nul_fields(&tree)
+        .flatten()
         .filter_map(|entry| {
             let (header, path) = entry.split_once('\t')?;
             let blob = header.split(' ').nth(2)?;
-            Some((path.replace('/', ""), blob.to_owned()))
+            let commit = path.replace('/', "");
+            is_id(&commit).then(|| (commit, blob.to_owned()))
         })
         .collect())
 }
