@@ -57,11 +57,13 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<(), Error> {
-    let mut input = String::new();
+    let mut input = Vec::new();
     if !cli.abandoned {
-        io::stdin()
-            .read_to_string(&mut input)
-            .map_err(Error::Input)?;
+        io::stdin().read_to_end(&mut input).map_err(Error::Input)?;
+    }
+    let (read, left_out) = Rewrite::parse_bytes(&input);
+    for line in left_out {
+        eprintln!("replaces-index: `{line}` is not UTF-8, and so no replacement; it is left out");
     }
     let dir = abandoned::dir().map_err(Error::Read)?;
     let waiting = abandoned::waiting(&dir)?;
@@ -69,9 +71,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
         eprintln!("replaces-index: {dropped}; it is left out");
     }
     let mut rewrite = waiting.rewrite.clone();
-    rewrite
-        .replacements
-        .extend(Rewrite::parse(&input).replacements);
+    rewrite.replacements.extend(read.replacements);
     heartbeat::while_running("replaces-index", "Ctrl-C to give up", || record(&rewrite))?;
     waiting.remove()?;
     replaces_index_record::repair_and_say("replaces-index");

@@ -115,20 +115,24 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
         Err(err) => return Err(to_error(err)),
     };
     let mut names = Vec::new();
-    // TODO: a record whose name or contents are not UTF-8 is not read: the one is passed over
-    // unannounced, and the other left out as a record that cannot be read.
+    let mut waiting = Waiting::default();
     for entry in entries {
         let name = entry.map_err(to_error)?.file_name();
-        if let Some(name) = name.to_str().filter(|name| !name.starts_with('.')) {
-            names.push(name.to_owned());
+        match name.to_str() {
+            Some(name) if name.starts_with('.') => {}
+            Some(name) => names.push(name.to_owned()),
+            // No record is so named; it is left where it is.
+            None => waiting.dropped.push(format!(
+                "{}, whose name is not UTF-8, is no abandoned record",
+                dir.join(&name).display()
+            )),
         }
     }
     names.sort();
-    let mut waiting = Waiting::default();
     for name in names {
         let path = dir.join(&name);
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
             // Another process recorded it and removed it in the meantime.
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => {
@@ -138,7 +142,18 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
                 continue;
             }
         };
-        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let mut lines = Vec::new();
+        for line in bytes.split(|&b| b == b'\n') {
+            match std::str::from_utf8(line) {
+                Ok(line) => lines.push(line),
+                Err(_) => waiting.dropped.push(format!(
+                    "{}: `{}` is not UTF-8, and so no replacement",
+                    path.display(),
+                    line.escape_ascii()
+                )),
+            }
+        }
+        for line in lines.into_iter().filter(|line| !line.trim().is_empty()) {
             let words: Vec<&str> = line.split_whitespace().collect();
             match words[..] {
                 [old, new] if is_id(old) && is_id(new) => {

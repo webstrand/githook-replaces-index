@@ -230,3 +230,43 @@ fn a_repository_whose_path_is_not_utf8_is_found() {
         &["rev-parse", "--verify", "refs/replaces-index/checked"],
     );
 }
+
+#[test]
+fn records_the_rest_of_a_rewrite_with_a_line_that_is_not_utf8() {
+    let (repo, a, a2) = common::amended();
+    let mut input = b"\xff\xfe\n".to_vec();
+    input.extend_from_slice(format!("{a} {a2}\n").as_bytes());
+    let output = common::hook(repo.path(), "amend", input, None)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(r"`\xff\xfe` of the rewrite is not UTF-8"),
+        "{stderr}"
+    );
+    assert_eq!(note(repo.path(), &a2), [format!("replaces: {a}")]);
+}
+
+#[test]
+fn names_a_file_among_the_abandoned_records_whose_name_is_not_utf8() {
+    use std::os::unix::ffi::OsStrExt;
+    let (repo, a, a2) = common::amended();
+    let dir = repo.path().join(".git/replaces-abandoned");
+    std::fs::create_dir_all(&dir).unwrap();
+    let odd = dir.join(std::ffi::OsStr::from_bytes(b"\xff"));
+    std::fs::write(&odd, format!("{a} {a2}\n")).unwrap();
+    let b = commit(repo.path(), "b");
+    let b2 = common::amend_of(repo.path(), &b);
+    let output = common::hook(repo.path(), "amend", format!("{b} {b2}\n"), None)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("whose name is not UTF-8, is no abandoned record"),
+        "{stderr}"
+    );
+    assert_eq!(note(repo.path(), &b2), [format!("replaces: {b}")]);
+    // It is left where it is.
+    assert!(odd.exists());
+}

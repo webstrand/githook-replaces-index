@@ -85,6 +85,24 @@ impl Rewrite {
         Self { replacements }
     }
 
+    /// Reads a rewrite from `input` as `parse` does. A line that is not UTF-8, which git never
+    /// gives, is left out, and returned as it may be shown, so that it keeps no other line from
+    /// being recorded.
+    pub fn parse_bytes(input: &[u8]) -> (Self, Vec<String>) {
+        let mut text = String::new();
+        let mut left_out = Vec::new();
+        for line in input.split(|&b| b == b'\n') {
+            match std::str::from_utf8(line) {
+                Ok(line) => {
+                    text.push_str(line);
+                    text.push('\n');
+                }
+                Err(_) => left_out.push(line.escape_ascii().to_string()),
+            }
+        }
+        (Self::parse(&text), left_out)
+    }
+
     /// The rewrite as `parse` reads it, one `<old> <new>` line per replacement.
     pub fn text(&self) -> String {
         self.replacements

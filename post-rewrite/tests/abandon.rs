@@ -307,10 +307,14 @@ fn a_worktree_keeps_its_record_in_the_common_git_directory() {
 }
 
 #[test]
-fn input_that_cannot_be_read_keeps_no_record() {
+fn input_that_is_not_utf8_is_left_out_and_keeps_no_record() {
     let repo = repo();
-    let (stderr, _) = failing(hook(repo.path(), "amend", [0xff, b'\n'], None));
-    assert!(stderr.contains("could not read"), "{stderr}");
+    let output = hook(repo.path(), "amend", [0xff, b'\n'], None)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("is not UTF-8"), "{stderr}");
     assert!(abandoned(repo.path()).is_empty());
 }
 

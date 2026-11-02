@@ -53,11 +53,18 @@ enum Event {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let mut input = String::new();
-    if let Err(err) = io::stdin().read_to_string(&mut input) {
+    let mut input = Vec::new();
+    if let Err(err) = io::stdin().read_to_end(&mut input) {
         say(Error::Input(err));
         return ExitCode::FAILURE;
     }
+    let (rewrite, left_out) = Rewrite::parse_bytes(&input);
+    for line in left_out {
+        say(format_args!(
+            "`{line}` of the rewrite is not UTF-8, and so no replacement; it is left out"
+        ));
+    }
+    let input = rewrite.text();
     let (events, received) = mpsc::channel();
     match Signals::new(SIGNALS) {
         Ok(mut signals) => {
