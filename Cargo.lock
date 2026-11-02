@@ -267,6 +267,7 @@ dependencies = [
  "insta",
  "replaces-index-record",
  "replaces-index-runner",
+ "signal-hook",
  "tempfile",
  "thiserror",
 ]

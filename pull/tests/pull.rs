@@ -351,3 +351,33 @@ fn merges_the_notes_of_a_url_and_keeps_no_ref_of_it() {
         format!("{REF}\n")
     );
 }
+
+#[test]
+fn a_signal_deletes_the_ref_of_a_url_that_the_pull_fetched() {
+    let (theirs, ours) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (theirs, ours) = (theirs.path(), ours.path());
+    git(theirs, &["init", "-q"]);
+    git(ours, &["init", "-q"]);
+    note_add(theirs, &id('b'), &format!("replaces: {}\n", id('a')));
+    note_add(ours, &id('b'), &format!("replaces: {}\n", id('e')));
+    // The merge waits for the lock while the fetched ref exists.
+    std::fs::write(ours.join(".git/refs/notes/replaces.lock"), "").unwrap();
+    let pull = isolated(ours, PULL, &[theirs.to_str().unwrap()])
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let fetched = || git(ours, &["for-each-ref", "refs/replaces-index/"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while fetched().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "nothing was fetched");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let status = Command::new("kill")
+        .args(["-INT", &pull.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = pull.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(fetched(), "");
+}

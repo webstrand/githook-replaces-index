@@ -6,7 +6,12 @@
 
 mod error;
 
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::thread;
+
+use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
+use signal_hook::iterator::Signals;
 
 use replaces_index_record::REF;
 use replaces_index_record::fetched::FETCHED;
@@ -43,6 +48,7 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
         );
     }
     let fetched = format!("{FETCHED}{}", std::process::id());
+    delete_on_signal(&fetched);
     let refspec = refspec(&format!("{fetched}/replaces"));
     // The reflog dates the refs, so that `git gc-replaces` tells those a pull left behind.
     let pulled = fetch_and_merge(
@@ -69,6 +75,38 @@ pub fn pull(remote: &str) -> Result<Pulled, Error> {
     runner::stdout_bytes_with_input(&mut git(["update-ref", "--stdin"]), &refs)
         .map_err(fetch_error)?;
     pulled
+}
+
+/// Starts a thread that, when a signal would end the pull, ends the git commands it runs, deletes
+/// the refs under `fetched`, and ends the pull as the signal would have.
+fn delete_on_signal(fetched: &str) {
+    let Ok(mut signals) = Signals::new([SIGHUP, SIGINT, SIGQUIT, SIGTERM]) else {
+        return;
+    };
+    let fetched = format!("{fetched}/");
+    thread::spawn(move || {
+        if let Some(signal) = signals.forever().next() {
+            runner::stop();
+            // Run apart from runner, which starts no command once it is stopping.
+            let listed = Command::new("git")
+                .args(["for-each-ref", "--format=delete %(refname)", &fetched])
+                .stderr(Stdio::null())
+                .output();
+            if let Ok(listed) = listed
+                && let Ok(mut delete) = Command::new("git")
+                    .args(["update-ref", "--stdin"])
+                    .stdin(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+            {
+                if let Some(mut stdin) = delete.stdin.take() {
+                    let _ = stdin.write_all(&listed.stdout);
+                }
+                let _ = delete.wait();
+            }
+            let _ = signal_hook::low_level::emulate_default_handler(signal);
+        }
+    });
 }
 
 /// Fetches `remote` as `git fetch <remote>` does, and pulls its replaces notes, which its fetch
