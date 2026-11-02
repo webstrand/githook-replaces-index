@@ -82,7 +82,12 @@ fn keep(path: &Path, contents: &[u8]) -> io::Result<()> {
     if kept.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    kept
+    kept?;
+    // A failure to sync leaves the copy whole, as the rename made it.
+    if let Some(dir) = path.parent() {
+        let _ = File::open(dir).and_then(|dir| dir.sync_all());
+    }
+    Ok(())
 }
 
 fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
