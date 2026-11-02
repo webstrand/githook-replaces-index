@@ -95,7 +95,7 @@ fn waiting() -> Waiting {
     match read {
         Ok(waiting) => {
             for dropped in &waiting.dropped {
-                tell(format_args!("{dropped}; it is left out"));
+                tell(runner::chain(dropped));
             }
             waiting
         }

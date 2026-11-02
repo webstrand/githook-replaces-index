@@ -16,11 +16,10 @@
 //! as one. A clone that keeps no reflog of the notes ref, as a bare one by default, is not checked.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Write};
 
 use runner::git;
-use runner::refspec::Refspec;
 
+use crate::notice::{Notice, say};
 use crate::{
     Change, Error, Notes, REF, REPLACES, all_notes, is_id, lines, named, notes_commit, write,
 };
@@ -254,74 +253,32 @@ fn dropped(before: &str, after: &str) -> Result<Notes, Error> {
 /// configuration that fetches the remote's notes beside the local ones instead. False when it
 /// named any, or could not read the refspecs.
 pub fn check_refspecs(prefix: &str) -> bool {
-    let mut stderr = io::stderr();
     let forcing = match runner::refspec::forcing(REF) {
         Ok(forcing) => forcing,
         Err(err) => {
-            let _ = writeln!(stderr, "{prefix}: could not read the fetch refspecs: {err}");
+            say(prefix, &Notice::RefspecsUnreadable(err));
             return false;
         }
     };
-    for refspec in &forcing {
-        let _ = writeln!(
-            stderr,
-            "{prefix}: remote.{}.fetch {} replaces {REF} on each fetch, dropping what this clone recorded since; {}",
-            refspec.remote,
-            refspec.text,
-            instead(refspec)
-        );
+    let fine = forcing.is_empty();
+    for refspec in forcing {
+        say(prefix, &Notice::Forcing(refspec));
     }
-    forcing.is_empty()
-}
-
-/// How the forcing `refspec` comes to fetch the remote's notes beside the local ones: with its
-/// destinations under refs/notes/remotes/<remote>/, where `git pull-replaces` merges them from.
-fn instead(refspec: &Refspec) -> String {
-    let remote = &refspec.remote;
-    match refspec
-        .dst
-        .as_deref()
-        .and_then(|dst| dst.strip_prefix("refs/notes/"))
-    {
-        Some(rest) => format!(
-            "to fetch the remote's notes beside this clone's: git config --replace-all --fixed-value {} {} {}",
-            runner::quote(format!("remote.{remote}.fetch").as_ref()).display(),
-            runner::quote(format!("+{}:refs/notes/remotes/{remote}/{rest}", refspec.src).as_ref())
-                .display(),
-            runner::quote(refspec.text.as_ref()).display(),
-        ),
-        None => format!(
-            "it must fetch {} into another ref, such as refs/notes/remotes/{remote}/replaces",
-            refspec.source_of(REF).unwrap_or_default()
-        ),
-    }
+    fine
 }
 
 /// Repairs the notes, and says on standard error, after `prefix`, what the repair put back, or
 /// why it could not check them; a failure to check does not stop the program.
 pub fn repair_and_say(prefix: &str) {
-    let mut stderr = io::stderr();
     match repair() {
         Ok(repaired) => {
-            for (before, after) in &repaired.steps {
-                let _ = writeln!(
-                    stderr,
-                    "{prefix}: a writer dropped lines from {REF} when it moved it from {before} to {after}; they are put back"
-                );
+            for (before, after) in repaired.steps {
+                say(prefix, &Notice::PutBack { before, after });
             }
-            for (commit, naming) in &repaired.folded {
-                let _ = writeln!(
-                    stderr,
-                    "{prefix}: the note of {commit}, which this clone no longer has, lost lines; the notes of {}, which name it, hold them",
-                    naming.join(" ")
-                );
+            for (commit, naming) in repaired.folded {
+                say(prefix, &Notice::Folded { commit, naming });
             }
         }
-        Err(err) => {
-            let _ = writeln!(
-                stderr,
-                "{prefix}: could not check {REF} for lines that a writer dropped: {err}"
-            );
-        }
+        Err(err) => say(prefix, &Notice::Unchecked(err)),
     }
 }

@@ -87,7 +87,26 @@ pub struct Waiting {
     /// Their replacements, oldest record first, without those that cannot be recorded.
     pub rewrite: Rewrite,
     /// Why lines of the records were left out.
-    pub dropped: Vec<String>,
+    pub dropped: Vec<Dropped>,
+}
+
+/// What of the abandoned records cannot be recorded, and is left out.
+#[derive(Debug, thiserror::Error)]
+pub enum Dropped {
+    #[error("{}, whose name is not UTF-8, is no abandoned record; it is left out", .0.display())]
+    NotUtf8Name(PathBuf),
+    #[error("{} could not be read; it is left out", .path.display())]
+    Unreadable {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("{}: `{line}` is not UTF-8, and so no replacement; it is left out", .path.display())]
+    NotUtf8Line { path: PathBuf, line: String },
+    #[error("{}: `{line}` is not a replacement; it is left out", .path.display())]
+    NotAReplacement { path: PathBuf, line: String },
+    #[error("{new} is not in this clone, so `{old} {new}` cannot be recorded; it is left out")]
+    Missing { old: String, new: String },
 }
 
 impl Waiting {
@@ -132,10 +151,7 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
             Some(name) if name.starts_with('.') => {}
             Some(name) => names.push(name.to_owned()),
             // It is never removed, since no record is so named.
-            None => waiting.dropped.push(format!(
-                "{}, whose name is not UTF-8, is no abandoned record",
-                dir.join(&name).display()
-            )),
+            None => waiting.dropped.push(Dropped::NotUtf8Name(dir.join(&name))),
         }
     }
     names.sort();
@@ -145,10 +161,8 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
             Ok(bytes) => bytes,
             // Another process recorded it and removed it in the meantime.
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => {
-                waiting
-                    .dropped
-                    .push(format!("{} could not be read: {err}", path.display()));
+            Err(source) => {
+                waiting.dropped.push(Dropped::Unreadable { path, source });
                 continue;
             }
         };
@@ -156,11 +170,10 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
         for line in bytes.split(|&b| b == b'\n') {
             match std::str::from_utf8(line) {
                 Ok(line) => lines.push(line),
-                Err(_) => waiting.dropped.push(format!(
-                    "{}: `{}` is not UTF-8, and so no replacement",
-                    path.display(),
-                    line.escape_ascii()
-                )),
+                Err(_) => waiting.dropped.push(Dropped::NotUtf8Line {
+                    path: path.clone(),
+                    line: line.escape_ascii().to_string(),
+                }),
             }
         }
         for line in lines.into_iter().filter(|line| !line.trim().is_empty()) {
@@ -172,9 +185,10 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
                         .replacements
                         .push((old.to_owned(), new.to_owned()));
                 }
-                _ => waiting
-                    .dropped
-                    .push(format!("{}: `{line}` is not a replacement", path.display())),
+                _ => waiting.dropped.push(Dropped::NotAReplacement {
+                    path: path.clone(),
+                    line: line.to_owned(),
+                }),
             }
         }
         waiting.files.push(path);
@@ -189,9 +203,10 @@ pub fn waiting(dir: &Path) -> Result<Waiting, Error> {
     waiting.rewrite.replacements.retain(|(old, new)| {
         let kept = commits.contains(new);
         if !kept {
-            waiting.dropped.push(format!(
-                "{new} is not in this clone, so `{old} {new}` cannot be recorded"
-            ));
+            waiting.dropped.push(Dropped::Missing {
+                old: old.clone(),
+                new: new.clone(),
+            });
         }
         kept
     });

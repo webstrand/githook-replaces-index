@@ -7,6 +7,7 @@ use std::io::{self, Read};
 use std::process::ExitCode;
 
 use clap::Parser;
+use replaces_index_record::notice::{Notice, say};
 use replaces_index_record::{Error, Rewrite, abandoned, gc, heartbeat, leftovers, record};
 
 #[derive(Parser)]
@@ -42,17 +43,16 @@ fn main() -> ExitCode {
     if cli.gc {
         return match heartbeat::while_running("gc-replaces", "Ctrl-C to give up", gc) {
             Ok(collected) => {
-                println!(
-                    "gc-replaces: removed {} notes of commits this clone no longer has, whose lines the notes that name them hold; kept {} that no note names",
-                    collected.removed, collected.kept
-                );
+                let notice = Notice::Collected {
+                    removed: collected.removed,
+                    kept: collected.kept,
+                };
+                println!("gc-replaces: {notice}");
                 replaces_index_record::repair_and_say("gc-replaces");
                 match leftovers::sweep() {
                     Ok(0) => ExitCode::SUCCESS,
                     Ok(swept) => {
-                        println!(
-                            "gc-replaces: deleted {swept} refs and files that ended processes left behind"
-                        );
+                        println!("gc-replaces: {}", Notice::Swept(swept));
                         ExitCode::SUCCESS
                     }
                     Err(err) => {
@@ -83,12 +83,12 @@ fn run(cli: &Cli) -> Result<(), Error> {
     }
     let (read, left_out) = Rewrite::parse_bytes(&input);
     for line in left_out {
-        eprintln!("replaces-index: `{line}` is not UTF-8, and so no replacement; it is left out");
+        say("replaces-index", &Notice::NotUtf8(line));
     }
     let dir = abandoned::dir().map_err(Error::Read)?;
     let waiting = abandoned::waiting(&dir)?;
     for dropped in &waiting.dropped {
-        eprintln!("replaces-index: {dropped}; it is left out");
+        say("replaces-index", dropped);
     }
     let mut rewrite = waiting.rewrite.clone();
     rewrite.replacements.extend(read.replacements);
